@@ -1,0 +1,127 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: eth-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - eth-net
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: infra/docker/airflow.Dockerfile
+    container_name: eth-airflow-webserver
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      EXCHANGE: binance
+      SYMBOL: ETH/USDT
+      TIMEFRAME: 1h
+    volumes:
+      - ./airflow/dags:/opt/airflow/project/airflow/dags
+      - ./pipelines:/opt/airflow/project/pipelines
+      - ./ml:/opt/airflow/project/ml
+      - airflow_logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create --role Admin --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --email admin@example.com || true &&
+      airflow webserver"
+    networks:
+      - eth-net
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: infra/docker/airflow.Dockerfile
+    container_name: eth-airflow-scheduler
+    depends_on:
+      - postgres
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      EXCHANGE: binance
+      SYMBOL: ETH/USDT
+      TIMEFRAME: 1h
+    volumes:
+      - ./airflow/dags:/opt/airflow/project/airflow/dags
+      - ./pipelines:/opt/airflow/project/pipelines
+      - ./ml:/opt/airflow/project/ml
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "airflow db migrate && airflow scheduler"
+    networks:
+      - eth-net
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    container_name: eth-api
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      MODEL_PATH: /app/model_registry/eth_price_model.joblib
+    volumes:
+      - ./ml/model_registry:/app/model_registry
+    ports:
+      - "8000:8000"
+    networks:
+      - eth-net
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    container_name: eth-web
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: ${VITE_API_URL}
+    ports:
+      - "3000:80"
+    networks:
+      - eth-net
+
+volumes:
+  postgres_data:
+  airflow_logs:
+
+networks:
+  eth-net:
+    driver: bridge

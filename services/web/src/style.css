@@ -1,0 +1,59 @@
+body {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  background: #f6f7fb;
+  color: #1a1a1a;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.header {
+  margin-bottom: 24px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.chart {
+  background: #f0f4ff;
+  border-radius: 6px;
+}
+
+.latest {
+  margin-top: 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e5e5e5;
+  text-align: left;
+  font-size: 14px;
+}
+
+.error {
+  padding: 12px;
+  background: #ffe5e5;
+  color: #b71c1c;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.prediction {
+  font-size: 18px;
+  font-weight: 600;
+}

@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 import psycopg2
 import psycopg2.extras
@@ -14,21 +15,38 @@ def get_db_conn():
     )
 
 
-def fetch_one(query, params=None):
+@contextmanager
+def db_conn_cursor(dict_cursor: bool = True):
     conn = get_db_conn()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, params)
-            return cur.fetchone()
+        factory = psycopg2.extras.RealDictCursor if dict_cursor else None
+        with conn.cursor(cursor_factory=factory) as cur:
+            yield conn, cur
     finally:
         conn.close()
+
+
+def fetch_one(query, params=None):
+    with db_conn_cursor(dict_cursor=True) as (_conn, cur):
+        cur.execute(query, params)
+        return cur.fetchone()
 
 
 def fetch_all(query, params=None):
-    conn = get_db_conn()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, params)
-            return cur.fetchall()
-    finally:
-        conn.close()
+    with db_conn_cursor(dict_cursor=True) as (_conn, cur):
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def execute(query, params=None):
+    with db_conn_cursor(dict_cursor=False) as (conn, cur):
+        cur.execute(query, params)
+        conn.commit()
+
+
+def execute_values(query, rows):
+    if not rows:
+        return
+    with db_conn_cursor(dict_cursor=False) as (conn, cur):
+        psycopg2.extras.execute_values(cur, query, rows)
+        conn.commit()

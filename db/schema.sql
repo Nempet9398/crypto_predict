@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS raw.eth_ohlcv (
   ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (exchange, symbol, timeframe, ts)
 );
-
+ 
 CREATE TABLE IF NOT EXISTS processed.eth_ohlcv_1h (
   exchange TEXT NOT NULL,
   symbol TEXT NOT NULL,

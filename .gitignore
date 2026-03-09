@@ -16,3 +16,15 @@ venv/
 
 # Logs / local data
 *.log
+
+# Frontend build artifacts
+services/web/node_modules/
+services/web/dist/
+
+
+# Model file
+*.h5
+*.pkl
+*.joblib
+ml/model_registry/
+notebooks/ml/model_registry/

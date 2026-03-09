@@ -28,8 +28,8 @@ def make_dag():
     with DAG(
         dag_id="ingestion_dag",
         default_args=default_args,
-        description="Ingest ETH/USDT OHLCV from Binance",
-        schedule_interval="@hourly",
+        description="Ingest ETH/USDT 15m OHLCV from Binance with gap fill",
+        schedule_interval="*/5 * * * *",
         start_date=datetime(2023, 1, 1),
         catchup=False,
         tags=["ingestion"],

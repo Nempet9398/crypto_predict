@@ -1,123 +1,385 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Toaster, toast } from "react-hot-toast";
+import IndicatorManagerModal from "./components/IndicatorManagerModal";
+import RightPanel from "./components/RightPanel";
+import TopBar from "./components/TopBar";
+import TradingChart from "./components/TradingChart";
+import { useDashboardStore } from "./store/dashboardStore";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const TZ = "Asia/Seoul";
+const INITIAL_LIMIT = 500;
+const PAGE_LIMIT = 500;
 
-function buildPath(points, width, height, padding) {
-  if (points.length === 0) return "";
-  const closes = points.map((p) => p.close);
-  const min = Math.min(...closes);
-  const max = Math.max(...closes);
-  const span = max - min || 1;
-  return points
-    .map((p, idx) => {
-      const x = padding + (idx / (points.length - 1)) * (width - padding * 2);
-      const y = padding + ((max - p.close) / span) * (height - padding * 2);
-      return `${idx === 0 ? "M" : "L"}${x} ${y}`;
-    })
-    .join(" ");
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body?.detail ? `: ${body.detail}` : "";
+    } catch {
+      // ignore json parse failures
+    }
+    throw new Error(`API error (${response.status})${detail}`);
+  }
+  return response.json();
+}
+
+function mergeLatest(history, latestPoints) {
+  if (!Array.isArray(latestPoints) || !latestPoints.length) return history;
+  const byTs = new Map((history || []).map((item) => [item.ts, item]));
+  latestPoints.forEach((item) => byTs.set(item.ts, item));
+  return [...byTs.values()].sort((left, right) => new Date(left.ts) - new Date(right.ts));
+}
+
+function prependOlder(history, olderPoints) {
+  if (!Array.isArray(olderPoints) || !olderPoints.length) return { merged: history, prepended: 0 };
+  const known = new Set((history || []).map((item) => item.ts));
+  const filtered = olderPoints.filter((item) => !known.has(item.ts));
+  return { merged: [...filtered, ...(history || [])], prepended: filtered.length };
 }
 
 export default function App() {
+  const {
+    symbol,
+    timeframe,
+    horizonHours,
+    lookbackDays,
+    autoRefresh,
+    indicatorModalOpen,
+    indicators,
+    modelRegistry,
+    activeModelId,
+    forecastVisibility,
+    modelColors,
+    viewport,
+    loadedRange,
+    setSymbol,
+    setTimeframe,
+    setHorizonHours,
+    setLookbackDays,
+    setAutoRefresh,
+    setIndicatorModalOpen,
+    addIndicator,
+    removeIndicator,
+    toggleIndicator,
+    updateIndicator,
+    setModels,
+    setActiveModelId,
+    toggleForecastModel,
+    setLoadedRange,
+    setLoadingOlder,
+    setViewport,
+  } = useDashboardStore();
+
   const [history, setHistory] = useState([]);
-  const [latest, setLatest] = useState(null);
-  const [features, setFeatures] = useState(null);
-  const [prediction, setPrediction] = useState(null);
-  const [error, setError] = useState(null);
+  const [forecastsByModel, setForecastsByModel] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [training, setTraining] = useState(false);
+  const [error, setError] = useState("");
+  const loadingOlderRef = useRef(false);
+  const loadedRangeRef = useRef(loadedRange);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [historyRes, latestRes, featuresRes, predictRes] = await Promise.all([
-          fetch(`${API_URL}/prices/history?limit=100`),
-          fetch(`${API_URL}/prices/latest`),
-          fetch(`${API_URL}/features/latest`),
-          fetch(`${API_URL}/predict`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({})
-          })
-        ]);
+    loadedRangeRef.current = loadedRange;
+  }, [loadedRange]);
 
-        if (!historyRes.ok || !latestRes.ok || !featuresRes.ok || !predictRes.ok) {
-          throw new Error("API not ready");
-        }
+  const visibleModelIds = useMemo(
+    () => (modelRegistry || []).filter((model) => forecastVisibility[model.id]).map((model) => model.id),
+    [modelRegistry, forecastVisibility]
+  );
 
-        const historyData = await historyRes.json();
-        const latestData = await latestRes.json();
-        const featureData = await featuresRes.json();
-        const predictData = await predictRes.json();
+  const fetchHistory = useCallback(
+    async ({ before = null, limit = INITIAL_LIMIT } = {}) => {
+      const query = new URLSearchParams({
+        symbol,
+        timeframe,
+        limit: String(limit),
+        tz: TZ,
+      });
+      if (before) query.set("before", before);
+      return fetchJson(`${API_URL}/prices/history?${query.toString()}`);
+    },
+    [symbol, timeframe]
+  );
 
-        setHistory(historyData.points || []);
-        setLatest(latestData.price);
-        setFeatures(featureData.features);
-        setPrediction(predictData.predicted_close);
-      } catch (err) {
-        setError(err.message);
+  const fetchModels = useCallback(async () => fetchJson(`${API_URL}/models?limit=100`), []);
+
+  const refreshForecasts = useCallback(
+    async (modelIds) => {
+      const ids = (modelIds || []).filter(Boolean);
+      if (!ids.length) {
+        setForecastsByModel({});
+        return;
       }
-    };
+      const jobs = ids.map(async (modelId) => {
+        try {
+          const query = new URLSearchParams({
+            model_id: modelId,
+            timeframe,
+            horizon_hours: String(horizonHours),
+            tz: TZ,
+          });
+          const forecast = await fetchJson(`${API_URL}/forecast?${query.toString()}`);
+          return [modelId, forecast];
+        } catch {
+          return [modelId, null];
+        }
+      });
+      const entries = await Promise.all(jobs);
+      setForecastsByModel(Object.fromEntries(entries.filter((item) => item[1])));
+    },
+    [timeframe, horizonHours]
+  );
 
-    load();
-  }, []);
+  const loadInitial = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [modelsPayload, historyPayload] = await Promise.all([fetchModels(), fetchHistory({ limit: INITIAL_LIMIT })]);
+      setModels(modelsPayload);
 
-  const chartPath = useMemo(() => buildPath(history, 600, 240, 16), [history]);
+      const points = historyPayload.points || [];
+      setHistory(points);
+      setLoadedRange({
+        oldestTs: points[0]?.ts || null,
+        newestTs: points[points.length - 1]?.ts || null,
+        hasMoreHistory: points.length === INITIAL_LIMIT,
+        loadingOlder: false,
+      });
+
+      if (points.length > 0) {
+        const endValue = points.length - 1;
+        const startIndex = Math.max(0, endValue - 240);
+        setViewport({ startValue: points[startIndex]?.ts || null, endValue: points[endValue]?.ts || null });
+      } else {
+        setViewport({ startValue: null, endValue: null });
+      }
+
+      const preferredModelId = modelsPayload.active_model_id || modelsPayload.models?.[0]?.id || null;
+      if (preferredModelId) setActiveModelId(preferredModelId);
+      await refreshForecasts(preferredModelId ? [preferredModelId] : []);
+    } catch (loadError) {
+      setError(loadError.message || "Failed to load dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    fetchHistory,
+    fetchModels,
+    refreshForecasts,
+    setActiveModelId,
+    setLoadedRange,
+    setModels,
+    setViewport,
+  ]);
+
+  const refreshLatestOnly = useCallback(async () => {
+    const query = new URLSearchParams({
+      symbol,
+      timeframe,
+      limit: "3",
+      tz: TZ,
+    });
+    const latestPayload = await fetchJson(`${API_URL}/prices/latest?${query.toString()}`);
+    const latestPoints = latestPayload.points || [];
+    setHistory((previous) => mergeLatest(previous, latestPoints));
+    if (latestPoints.length) {
+      const nextRange = {
+        ...(loadedRangeRef.current || loadedRange),
+        newestTs: latestPoints[latestPoints.length - 1].ts,
+      };
+      loadedRangeRef.current = nextRange;
+      setLoadedRange(nextRange);
+    }
+  }, [symbol, timeframe, setLoadedRange]);
+
+  const loadOlderHistory = useCallback(async () => {
+    const range = loadedRangeRef.current;
+    if (loadingOlderRef.current || range.loadingOlder || !range.hasMoreHistory || !range.oldestTs) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const olderPayload = await fetchHistory({ before: range.oldestTs, limit: PAGE_LIMIT });
+      const olderPoints = olderPayload.points || [];
+      if (!olderPoints.length) {
+        const nextRange = { ...range, hasMoreHistory: false, loadingOlder: false };
+        loadedRangeRef.current = nextRange;
+        setLoadedRange(nextRange);
+        loadingOlderRef.current = false;
+        return;
+      }
+
+      let prependedCount = 0;
+      setHistory((previous) => {
+        const { merged, prepended } = prependOlder(previous, olderPoints);
+        prependedCount = prepended;
+        return merged;
+      });
+
+      const nextRange = {
+        oldestTs: olderPoints[0]?.ts || range.oldestTs,
+        newestTs: range.newestTs,
+        hasMoreHistory: olderPoints.length === PAGE_LIMIT,
+        loadingOlder: false,
+      };
+      loadedRangeRef.current = nextRange;
+      setLoadedRange(nextRange);
+    } catch (olderError) {
+      setError(olderError.message || "Failed to load older candles");
+      setLoadingOlder(false);
+    } finally {
+      loadingOlderRef.current = false;
+    }
+  }, [fetchHistory, setLoadedRange, setLoadingOlder]);
+
+  const onRefresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      await refreshLatestOnly();
+      const modelsPayload = await fetchModels();
+      setModels(modelsPayload);
+      const preferredModelId = activeModelId || modelsPayload.active_model_id || modelsPayload.models?.[0]?.id || null;
+      if (preferredModelId && !activeModelId) setActiveModelId(preferredModelId);
+      const targetIds = (modelsPayload.models || [])
+        .filter((model) => forecastVisibility[model.id] || model.id === preferredModelId)
+        .map((model) => model.id);
+      await refreshForecasts(targetIds);
+    } catch (refreshError) {
+      setError(refreshError.message || "Failed to refresh dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    activeModelId,
+    fetchModels,
+    forecastVisibility,
+    refreshForecasts,
+    refreshLatestOnly,
+    setActiveModelId,
+    setModels,
+  ]);
+
+  const onTrain = useCallback(async () => {
+    setTraining(true);
+    const toastId = toast.loading("Training model...");
+    const prevViewport = viewport;
+    try {
+      await fetchJson(`${API_URL}/train`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lookback_days: Number(lookbackDays),
+          horizon_hours: Number(horizonHours),
+          symbol,
+          timeframe,
+          exchange: "binance",
+          auto_order: true,
+          set_active: true,
+        }),
+      });
+      await loadInitial();
+      if (prevViewport?.startValue != null && prevViewport?.endValue != null) {
+        setViewport(prevViewport);
+      }
+      toast.success("Training complete", { id: toastId });
+    } catch (trainError) {
+      toast.error(trainError.message || "Training failed", { id: toastId });
+    } finally {
+      setTraining(false);
+    }
+  }, [horizonHours, loadInitial, lookbackDays, setViewport, symbol, timeframe, viewport]);
+
+  useEffect(() => {
+    loadInitial();
+  }, [loadInitial]);
+
+  useEffect(() => {
+    const ids = visibleModelIds.length ? visibleModelIds : activeModelId ? [activeModelId] : [];
+    refreshForecasts(ids).catch(() => {
+      // keep previous forecasts on transient issues
+    });
+  }, [activeModelId, refreshForecasts, visibleModelIds]);
+
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const timer = setInterval(() => {
+      refreshLatestOnly()
+        .then(() => refreshForecasts(visibleModelIds.length ? visibleModelIds : activeModelId ? [activeModelId] : []))
+        .catch(() => {
+          // no-op, transient refresh errors are ignored
+        });
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [activeModelId, autoRefresh, refreshForecasts, refreshLatestOnly, visibleModelIds]);
 
   return (
-    <div className="app">
-      <header className="header">
-        <h1>Ethereum Data Pipeline</h1>
-        <p>ETH/USDT 1h data served from FastAPI</p>
-      </header>
+    <div className="dashboard-root">
+      <Toaster position="top-right" toastOptions={{ style: { background: "#0f1628", color: "#dbe7ff", border: "1px solid #1f2b45" } }} />
 
-      {error && <div className="error">{error}</div>}
+      <TopBar
+        symbol={symbol}
+        timeframe={timeframe}
+        models={modelRegistry}
+        activeModelId={activeModelId}
+        autoRefresh={autoRefresh}
+        loading={loading}
+        training={training}
+        onSymbolChange={setSymbol}
+        onTimeframeChange={setTimeframe}
+        onOpenIndicators={() => setIndicatorModalOpen(true)}
+        onModelChange={setActiveModelId}
+        onRefresh={onRefresh}
+        onTrain={onTrain}
+        onAutoRefreshChange={setAutoRefresh}
+      />
 
-      <section className="card">
-        <h2>Price Chart</h2>
-        <svg width="100%" height="240" viewBox="0 0 600 240" className="chart">
-          <path d={chartPath} fill="none" stroke="#1976d2" strokeWidth="2" />
-        </svg>
-        {latest && (
-          <div className="latest">
-            Latest close: <strong>{Number(latest.close).toFixed(2)}</strong>
+      {error ? <div className="error-banner">{error}</div> : null}
+
+      <section className="dashboard-main">
+        <div className="chart-shell">
+          <TradingChart
+            history={history}
+            indicators={indicators}
+            forecastsByModel={forecastsByModel}
+            modelColors={modelColors}
+            forecastVisibility={forecastVisibility}
+            activeModelId={activeModelId}
+            viewport={viewport}
+            onViewportChange={setViewport}
+            onNeedOlderData={loadOlderHistory}
+          />
+          <div className="model-toggles">
+            {(modelRegistry || []).map((model) => (
+              <label key={model.id} className="toggle">
+                <input type="checkbox" checked={Boolean(forecastVisibility[model.id])} onChange={() => toggleForecastModel(model.id)} />
+                <span style={{ color: modelColors[model.id] || "#38bdf8" }}>{model.name}</span>
+              </label>
+            ))}
           </div>
-        )}
+        </div>
+
+        <RightPanel
+          timeframe={timeframe}
+          modelRegistry={modelRegistry}
+          forecastsByModel={forecastsByModel}
+          modelColors={modelColors}
+          forecastVisibility={forecastVisibility}
+          activeModelId={activeModelId}
+        />
       </section>
 
-      <section className="card">
-        <h2>Features</h2>
-        {features ? (
-          <table>
-            <thead>
-              <tr>
-                <th>returns_1h</th>
-                <th>sma_5</th>
-                <th>sma_10</th>
-                <th>ema_10</th>
-                <th>volatility_10</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>{Number(features.returns_1h).toFixed(6)}</td>
-                <td>{Number(features.sma_5).toFixed(2)}</td>
-                <td>{Number(features.sma_10).toFixed(2)}</td>
-                <td>{Number(features.ema_10).toFixed(2)}</td>
-                <td>{Number(features.volatility_10).toFixed(6)}</td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <p>No features available.</p>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Prediction</h2>
-        {prediction !== null ? (
-          <div className="prediction">Predicted next close: {Number(prediction).toFixed(2)}</div>
-        ) : (
-          <p>No prediction available.</p>
-        )}
-      </section>
+      <IndicatorManagerModal
+        open={indicatorModalOpen}
+        indicators={indicators}
+        onClose={() => setIndicatorModalOpen(false)}
+        onAdd={addIndicator}
+        onRemove={removeIndicator}
+        onToggle={toggleIndicator}
+        onUpdate={updateIndicator}
+      />
     </div>
   );
 }

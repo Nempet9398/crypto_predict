@@ -14,6 +14,10 @@ def run_script(script_rel_path):
     subprocess.run(["python", script_path], check=True, env=env)
 
 
+def ingest_task():
+    run_script("pipelines/ingestion/binance_ohlcv.py")
+
+
 def resample_task():
     run_script("pipelines/processing/resample.py")
 
@@ -42,6 +46,10 @@ def make_dag():
         catchup=False,
         tags=["features"],
     ) as dag:
+        ingest = PythonOperator(
+            task_id="ingest_ohlcv",
+            python_callable=ingest_task,
+        )
         resample = PythonOperator(
             task_id="resample_1h",
             python_callable=resample_task,
@@ -55,7 +63,7 @@ def make_dag():
             python_callable=train_task,
         )
 
-        resample >> features >> train
+        ingest >> resample >> features >> train
 
     return dag
 

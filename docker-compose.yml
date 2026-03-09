@@ -37,7 +37,7 @@ services:
       DB_NAME: ${DB_NAME}
       EXCHANGE: binance
       SYMBOL: ETH/USDT
-      TIMEFRAME: 1h
+      TIMEFRAME: 15m
     volumes:
       - ./airflow/dags:/opt/airflow/project/airflow/dags
       - ./pipelines:/opt/airflow/project/pipelines
@@ -72,7 +72,7 @@ services:
       DB_NAME: ${DB_NAME}
       EXCHANGE: binance
       SYMBOL: ETH/USDT
-      TIMEFRAME: 1h
+      TIMEFRAME: 15m
     volumes:
       - ./airflow/dags:/opt/airflow/project/airflow/dags
       - ./pipelines:/opt/airflow/project/pipelines
@@ -96,11 +96,69 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
-      MODEL_PATH: /app/model_registry/eth_price_model.joblib
+      EXCHANGE: ${EXCHANGE:-binance}
+      SYMBOL: ${SYMBOL:-ETH/USDT}
+      TIMEFRAME: ${TIMEFRAME:-15m}
+      ARIMA_MODEL_PATH: /app/model_registry/eth_arima.pkl
+      ARIMA_META_PATH: /app/model_registry/eth_arima_meta.json
+      MODEL_REGISTRY_DIR: /app/model_registry
+      DEFAULT_LOOKBACK_DAYS: ${DEFAULT_LOOKBACK_DAYS:-7}
+      DEFAULT_HORIZON_HOURS: ${DEFAULT_HORIZON_HOURS:-6}
+      ARIMA_DEFAULT_ORDER: ${ARIMA_DEFAULT_ORDER:-2,1,2}
+      AUTO_ORDER_DEFAULT: ${AUTO_ORDER_DEFAULT:-true}
+      ORDER_METRIC_DEFAULT: ${ORDER_METRIC_DEFAULT:-aic}
+      MODEL_FAMILY_DEFAULT: ${MODEL_FAMILY_DEFAULT:-auto}
+      TRANSFORM_MODE_DEFAULT: ${TRANSFORM_MODE_DEFAULT:-auto}
+      SEASONAL_PERIODS_DEFAULT: ${SEASONAL_PERIODS_DEFAULT:-24,168}
+      SEASONAL_ORDER_DEFAULT: ${SEASONAL_ORDER_DEFAULT:-1,0,1}
+      FORECAST_CONF_ALPHA: ${FORECAST_CONF_ALPHA:-0.05}
+      BACKTEST_HOURS_DEFAULT: ${BACKTEST_HOURS_DEFAULT:-24}
     volumes:
       - ./ml/model_registry:/app/model_registry
     ports:
       - "8000:8000"
+    networks:
+      - eth-net
+
+  data-updater:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    container_name: eth-data-updater
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      EXCHANGE: ${EXCHANGE:-binance}
+      SYMBOL: ${SYMBOL:-ETH/USDT}
+      TIMEFRAME: ${TIMEFRAME:-15m}
+      INITIAL_BACKFILL_DAYS: ${INITIAL_BACKFILL_DAYS:-30}
+      BACKFILL_INTERVAL_SECONDS: ${BACKFILL_INTERVAL_SECONDS:-300}
+      AUTO_RETRAIN_ENABLED: ${AUTO_RETRAIN_ENABLED:-true}
+      AUTO_RETRAIN_MODE: ${AUTO_RETRAIN_MODE:-hybrid}
+      MODEL_TTL_MINUTES: ${MODEL_TTL_MINUTES:-180}
+      RETRAIN_MIN_NEW_POINTS: ${RETRAIN_MIN_NEW_POINTS:-1}
+      DEFAULT_LOOKBACK_DAYS: ${DEFAULT_LOOKBACK_DAYS:-7}
+      DEFAULT_HORIZON_HOURS: ${DEFAULT_HORIZON_HOURS:-6}
+      ARIMA_DEFAULT_ORDER: ${ARIMA_DEFAULT_ORDER:-2,1,2}
+      AUTO_ORDER_DEFAULT: ${AUTO_ORDER_DEFAULT:-true}
+      ORDER_METRIC_DEFAULT: ${ORDER_METRIC_DEFAULT:-aic}
+      MODEL_FAMILY_DEFAULT: ${MODEL_FAMILY_DEFAULT:-auto}
+      TRANSFORM_MODE_DEFAULT: ${TRANSFORM_MODE_DEFAULT:-auto}
+      SEASONAL_PERIODS_DEFAULT: ${SEASONAL_PERIODS_DEFAULT:-24,168}
+      SEASONAL_ORDER_DEFAULT: ${SEASONAL_ORDER_DEFAULT:-1,0,1}
+      FORECAST_CONF_ALPHA: ${FORECAST_CONF_ALPHA:-0.05}
+      BACKTEST_HOURS_DEFAULT: ${BACKTEST_HOURS_DEFAULT:-24}
+      MODEL_REGISTRY_DIR: /app/model_registry
+      ARIMA_MODEL_PATH: /app/model_registry/eth_arima.pkl
+      ARIMA_META_PATH: /app/model_registry/eth_arima_meta.json
+    volumes:
+      - ./ml/model_registry:/app/model_registry
+    command: ["python", "-m", "app.updater"]
     networks:
       - eth-net
 

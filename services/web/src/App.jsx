@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Toaster, toast } from "react-hot-toast";
 import IndicatorManagerModal from "./components/IndicatorManagerModal";
 import RightPanel from "./components/RightPanel";
+import SignalPanel from "./components/SignalPanel";
 import TopBar from "./components/TopBar";
 import TradingChart from "./components/TradingChart";
 import { useDashboardStore } from "./store/dashboardStore";
@@ -78,6 +79,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [training, setTraining] = useState(false);
   const [error, setError] = useState("");
+  const [ensembleSignal, setEnsembleSignal] = useState(null);
   const loadingOlderRef = useRef(false);
   const loadedRangeRef = useRef(loadedRange);
 
@@ -105,6 +107,16 @@ export default function App() {
   );
 
   const fetchModels = useCallback(async () => fetchJson(`${API_URL}/models?limit=100`), []);
+
+  const refreshEnsembleSignal = useCallback(async () => {
+    try {
+      const query = new URLSearchParams({ horizon_hours: String(horizonHours), timeframe });
+      const result = await fetchJson(`${API_URL}/signals/ensemble?${query.toString()}`);
+      setEnsembleSignal(result);
+    } catch {
+      // non-fatal: keep previous signal
+    }
+  }, [horizonHours, timeframe]);
 
   const refreshForecasts = useCallback(
     async (modelIds) => {
@@ -160,6 +172,7 @@ export default function App() {
       const preferredModelId = modelsPayload.active_model_id || modelsPayload.models?.[0]?.id || null;
       if (preferredModelId) setActiveModelId(preferredModelId);
       await refreshForecasts(preferredModelId ? [preferredModelId] : []);
+      refreshEnsembleSignal().catch(() => {});
     } catch (loadError) {
       setError(loadError.message || "Failed to load dashboard");
     } finally {
@@ -168,6 +181,7 @@ export default function App() {
   }, [
     fetchHistory,
     fetchModels,
+    refreshEnsembleSignal,
     refreshForecasts,
     setActiveModelId,
     setLoadedRange,
@@ -307,13 +321,16 @@ export default function App() {
     if (!autoRefresh) return undefined;
     const timer = setInterval(() => {
       refreshLatestOnly()
-        .then(() => refreshForecasts(visibleModelIds.length ? visibleModelIds : activeModelId ? [activeModelId] : []))
+        .then(() => Promise.all([
+          refreshForecasts(visibleModelIds.length ? visibleModelIds : activeModelId ? [activeModelId] : []),
+          refreshEnsembleSignal(),
+        ]))
         .catch(() => {
           // no-op, transient refresh errors are ignored
         });
     }, 15000);
     return () => clearInterval(timer);
-  }, [activeModelId, autoRefresh, refreshForecasts, refreshLatestOnly, visibleModelIds]);
+  }, [activeModelId, autoRefresh, refreshEnsembleSignal, refreshForecasts, refreshLatestOnly, visibleModelIds]);
 
   return (
     <div className="dashboard-root">
@@ -368,6 +385,12 @@ export default function App() {
           modelColors={modelColors}
           forecastVisibility={forecastVisibility}
           activeModelId={activeModelId}
+        />
+
+        <SignalPanel
+          ensemble={ensembleSignal}
+          selectedHorizon={horizonHours}
+          modelStatus={null}
         />
       </section>
 

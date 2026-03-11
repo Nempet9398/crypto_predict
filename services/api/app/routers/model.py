@@ -17,6 +17,7 @@ from app.core.arima_service import (
     parse_seasonal_order,
     train_arima,
 )
+from app.core.ensemble_service import compute_ensemble_signal
 
 router = APIRouter(tags=["model"])
 UTC = timezone.utc
@@ -271,3 +272,46 @@ def strategy_backtest(
 def get_model_status():
     st = model_status()
     return st
+
+
+@router.get("/signals/ensemble")
+def ensemble_signals(
+    horizon_hours: int = Query(6, ge=1, le=168),
+    atr_tp_multiple: float = Query(2.0, gt=0.0, le=10.0),
+    atr_sl_multiple: float = Query(1.0, gt=0.0, le=10.0),
+    require_mtf_agreement: bool = Query(True),
+    min_ml_prob: float = Query(0.45, ge=0.0, le=1.0),
+    min_arima_prob: float = Query(0.50, ge=0.0, le=1.0),
+    max_kelly_fraction: float = Query(0.25, gt=0.0, le=1.0),
+    timeframe: str | None = Query(None),
+):
+    """
+    Compute ensemble trading signal combining ARIMA + ML + multi-timeframe alignment.
+
+    Returns directional signal with ATR-based TP/SL and position sizing suggestion.
+    """
+    exchange = __import__("os").getenv("EXCHANGE", "binance")
+    symbol = __import__("os").getenv("SYMBOL", "ETH/USDT")
+    tf = timeframe or __import__("os").getenv("TIMEFRAME", "15m")
+
+    try:
+        result = compute_ensemble_signal(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=tf,
+            horizon_hours=horizon_hours,
+            atr_tp_multiple=atr_tp_multiple,
+            atr_sl_multiple=atr_sl_multiple,
+            require_mtf_agreement=require_mtf_agreement,
+            min_ml_prob=min_ml_prob,
+            min_arima_prob=min_arima_prob,
+            max_kelly_fraction=max_kelly_fraction,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"앙상블 시그널 계산 실패: {exc}") from exc
+
+    return result

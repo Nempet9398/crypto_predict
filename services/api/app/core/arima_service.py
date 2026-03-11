@@ -973,18 +973,60 @@ def backtest_strategy(
 
     max_drawdown = 0.0
     peak = -math.inf
+    mdd_duration = 0
+    current_dd_duration = 0
     for point in pnl_series:
         value = float(point["cum_pnl"])
-        peak = max(peak, value)
+        if value >= peak:
+            peak = value
+            current_dd_duration = 0
+        else:
+            current_dd_duration += 1
+            mdd_duration = max(mdd_duration, current_dd_duration)
         max_drawdown = min(max_drawdown, value - peak)
 
     n = len(trades)
+    pnl_list = [float(t["pnl"]) for t in trades]
+
+    # ── Risk-adjusted metrics ─────────────────────────────────────────────────
+    annualize_factor = math.sqrt(252 * 24 * (3600 / max(step_seconds, 1)))
+
+    sharpe = sortino = calmar = profit_factor = payoff_ratio = 0.0
+    if n > 1:
+        arr = np.array(pnl_list, dtype=float)
+        mu = float(np.mean(arr))
+        sigma = float(np.std(arr, ddof=1))
+        sharpe = (mu / (sigma + 1e-9)) * annualize_factor
+
+        downside = arr[arr < 0]
+        sortino_denom = float(np.sqrt(np.mean(downside ** 2) + 1e-9)) * annualize_factor
+        sortino = mu / (sortino_denom + 1e-9) * annualize_factor
+
+        gross_profit = sum(p for p in pnl_list if p > 0)
+        gross_loss = abs(sum(p for p in pnl_list if p < 0))
+        profit_factor = gross_profit / (gross_loss + 1e-9)
+
+        wins_list = [p for p in pnl_list if p > 0]
+        losses_list = [p for p in pnl_list if p < 0]
+        avg_win = float(np.mean(wins_list)) if wins_list else 0.0
+        avg_loss = float(abs(np.mean(losses_list))) if losses_list else 0.0
+        payoff_ratio = avg_win / (avg_loss + 1e-9)
+
+        if max_drawdown < 0:
+            calmar = (cumulative / abs(max_drawdown))
+
     summary = {
         "n_trades": n,
         "win_rate": (wins / n) if n else 0.0,
-        "avg_pnl": (sum(float(t["pnl"]) for t in trades) / n) if n else 0.0,
+        "avg_pnl": (sum(pnl_list) / n) if n else 0.0,
         "cumulative_pnl": cumulative,
         "mdd": float(max_drawdown),
+        "mdd_duration_bars": mdd_duration,
+        "sharpe": round(sharpe, 4),
+        "sortino": round(sortino, 4),
+        "calmar": round(calmar, 4),
+        "profit_factor": round(profit_factor, 4),
+        "payoff_ratio": round(payoff_ratio, 4),
     }
 
     return {

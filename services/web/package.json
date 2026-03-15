@@ -1,6 +1,6 @@
 {
-  "name": "eth-data-web",
-  "version": "1.0.0",
+  "name": "eth-trading-dashboard",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,8 +9,7 @@
     "preview": "vite preview --host 0.0.0.0 --port 5173"
   },
   "dependencies": {
-    "echarts": "^5.5.1",
-    "echarts-for-react": "^3.0.2",
+    "lightweight-charts": "^4.2.0",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-hot-toast": "^2.4.1",

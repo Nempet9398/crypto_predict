@@ -1,35 +1,60 @@
-# crypto_predict — 암호화폐 트레이딩 신호 대시보드
+# crypto_predict — ETH 선물 거래 의사결정 대시보드
 
 > Binance 15분 캔들을 기반으로 기술 지표, 머신러닝, ARIMA 예측을 앙상블해 **LONG/SHORT 신호**와 **동적 TP/SL**을 자동으로 생성하는 풀스택 트레이딩 대시보드입니다.
+> **실제 주문 집행 없이** 분석·의사결정 지원에 집중합니다.
 
 ---
 
-## 전체 흐름 한눈에 보기
+## 전체 흐름
 
 ```
 Binance OHLCV (15m)
         ↓
   PostgreSQL 저장 (raw.eth_ohlcv)
         ↓
-  Postgres SQL 리샘플 → 1h, 4h 파생
+  SQL 리샘플 → 1h, 4h 파생
         ↓
-  기술 지표 계산 (RSI, MACD, BB, ATR, OBV...)
+  기술 지표 계산 (RSI, MACD, BB, ATR, OBV, VWAP, Stochastic ...)
         ↓
-  ┌─────────────────┐    ┌─────────────────┐
-  │  ARIMA 예측     │    │  ML 분류 모델    │
-  │ (가격 밴드 예측) │    │ (XGBoost / LGB) │
-  │                 │    │  방향 확률 출력  │
-  └────────┬────────┘    └────────┬────────┘
-           │                     │
-           └──────── 앙상블 ──────┘
-                      ↓
-           멀티타임프레임 확인 (1h, 4h)
-                      ↓
-         최종 신호: LONG / SHORT / HOLD
-         + ATR 기반 동적 TP / SL
-         + Half-Kelly 포지션 사이징
-                      ↓
-              FastAPI → React UI
+  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+  │  ARIMA 예측     │    │  ML 분류 모델    │    │ 멀티타임프레임   │
+  │  30% 가중치     │    │  40% (XGB/LGB)  │    │  30% (1h, 4h)   │
+  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘
+           └──────────────── 앙상블 ──────────────────────┘
+                              ↓
+               최종 신호: LONG / SHORT / NO-TRADE
+               + ATR 기반 동적 TP / SL
+               + Half-Kelly 포지션 사이징
+                              ↓
+               FastAPI → React 대시보드
+```
+
+---
+
+## 대시보드 레이아웃
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TopBar: 심볼 / 타임프레임 / 모델 선택 / 학습 / 자동갱신          │
+├─────────────────────────────────────────────────────────────────┤
+│ MarketStatsBar: 현재가 · 24h변화 · 고/저 · ATR · 변동성레짐     │
+├───────────────────────────────────┬─────────────────────────────┤
+│                                   │ SignalPanel                 │
+│  TradingChart                     │ - 앙상블 신호 (L/S/NT)      │
+│  - 캔들스틱 + EMA/SMA/BB          │ - TP/SL 가격               │
+│  - 예측선 + 신뢰구간 밴드          │ - Kelly 포지션 %            │
+│  - 과거 신호 마커 ▲▼              ├─────────────────────────────┤
+│                                   │ MultiTimeframePanel         │
+│                                   │ - 15m / 1h / 4h 신호 정렬  │
+│                                   ├─────────────────────────────┤
+│                                   │ TechnicalSummary            │
+│                                   │ - RSI / MACD / BB / Stoch  │
+│                                   ├─────────────────────────────┤
+│                                   │ RightPanel                  │
+│                                   │ - 모델 예측값 비교           │
+├───────────────────────────────────┴─────────────────────────────┤
+│ 하단 탭: [백테스트] [신호히스토리] [리스크계산기] [모델&데이터]   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -40,47 +65,61 @@ Binance OHLCV (15m)
 crypto_predict/
 ├── airflow/
 │   └── dags/
-│       ├── ingestion_dag.py         # 5분마다 Binance 데이터 수집
-│       ├── feature_pipeline_dag.py  # 매시간 기술 지표 계산
-│       └── ml_retrain_dag.py        # 4시간마다 ML 모델 재학습
+│       ├── ingestion_dag.py          # 5분마다 Binance 데이터 수집
+│       ├── feature_pipeline_dag.py   # 매시간 기술 지표 계산
+│       └── ml_retrain_dag.py         # 4시간마다 ML 모델 재학습
 ├── db/
-│   ├── schema.sql                   # 테이블 정의
-│   └── migrations/                  # DB 마이그레이션
+│   └── schema.sql                    # 테이블 정의 (초기 생성 전용)
 ├── ml/
-│   ├── train_arima.py               # ARIMA 학습
-│   ├── train_ml_classifier.py       # XGBoost / LightGBM 학습 및 선택
-│   ├── train.py                     # 통합 학습 엔트리포인트
-│   ├── compute_ensemble_signals.py  # 앙상블 신호 계산
-│   └── ml_classifier_service.py     # ML 예측 서비스
+│   ├── train_arima.py                # ARIMA 학습
+│   ├── train_ml_classifier.py        # XGBoost / LightGBM 학습 및 선택
+│   ├── train.py                      # 통합 학습 엔트리포인트
+│   ├── compute_ensemble_signals.py   # 앙상블 신호 계산
+│   └── ml_classifier_service.py      # ML 예측 서비스
 ├── pipelines/
 │   ├── ingestion/
-│   │   └── binance_ohlcv.py         # Binance ccxt 수집
+│   │   └── binance_ohlcv.py          # Binance ccxt 수집
 │   ├── features/
-│   │   └── technical_indicators.py  # 기술 지표 계산
+│   │   └── technical_indicators.py   # 기술 지표 계산
 │   └── processing/
-│       └── resample.py              # DB 내 타임프레임 리샘플
+│       └── resample.py               # DB 내 타임프레임 리샘플
 ├── services/
 │   ├── api/
 │   │   └── app/
 │   │       ├── core/
-│   │       │   ├── arima_service.py     # ARIMA 예측 서비스
-│   │       │   ├── ensemble_service.py  # 앙상블 신호 생성
-│   │       │   ├── ohlcv.py             # OHLCV 데이터 조회
-│   │       │   └── model.py             # 모델 상태 관리
-│   │       └── routers/
-│   │           ├── prices.py            # 가격 API
-│   │           ├── model.py             # 학습/예측 API
-│   │           ├── features.py          # 지표 API
-│   │           └── data.py              # 데이터 상태 API
+│   │       │   ├── db.py                 # DB 연결 유틸
+│   │       │   ├── migrations.py         # 시작 시 자동 마이그레이션
+│   │       │   ├── arima_service.py      # ARIMA 예측 서비스
+│   │       │   ├── ensemble_service.py   # 앙상블 신호 생성 + DB 저장
+│   │       │   ├── ohlcv.py              # OHLCV 데이터 조회
+│   │       │   └── model.py              # 모델 상태 관리
+│   │       ├── routers/
+│   │       │   ├── prices.py             # 가격 API
+│   │       │   ├── model.py              # 학습/예측 API
+│   │       │   ├── features.py           # 기술지표 최신값 API
+│   │       │   ├── signals_history.py    # 신호 히스토리 API
+│   │       │   ├── data.py               # 데이터 상태 API
+│   │       │   └── health.py             # 헬스체크
+│   │       └── main.py                   # FastAPI 앱 + 자동 마이그레이션
 │   └── web/
 │       └── src/
 │           ├── components/
-│           │   ├── TradingChart.jsx     # 캔들차트 메인
-│           │   ├── SignalPanel.jsx      # 앙상블 신호 패널
-│           │   ├── RightPanel.jsx       # 예측 정보 패널
-│           │   ├── TopBar.jsx           # 상단 설정 바
-│           │   └── IndicatorManagerModal.jsx
-│           └── store/                   # zustand 전역 상태
+│           │   ├── TradingChart.jsx          # 캔들차트 + 신호 마커 ▲▼
+│           │   ├── MarketStatsBar.jsx         # 현재가 · ATR · 변동성 레짐
+│           │   ├── SignalPanel.jsx            # 앙상블 신호 패널
+│           │   ├── MultiTimeframePanel.jsx    # 15m/1h/4h 신호 정렬
+│           │   ├── TechnicalSummary.jsx       # RSI/MACD/BB/Stoch 요약
+│           │   ├── RightPanel.jsx             # 모델 예측 비교
+│           │   ├── BacktestPanel.jsx          # 백테스트 P&L 차트
+│           │   ├── SignalHistoryPanel.jsx      # 과거 신호 테이블
+│           │   ├── RiskCalculator.jsx         # 선물 리스크 계산기
+│           │   ├── ModelDataStatusPanel.jsx   # 모델·데이터 상태
+│           │   ├── BottomTabs.jsx             # 하단 탭 컨테이너
+│           │   ├── TopBar.jsx                 # 상단 설정 바
+│           │   └── IndicatorManagerModal.jsx  # 지표 설정 모달
+│           ├── store/
+│           │   └── dashboardStore.js          # zustand 전역 상태
+│           └── App.jsx                        # 메인 앱 조립
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -91,291 +130,100 @@ crypto_predict/
 
 ### 1. 데이터 수집 — 단일 소스 전략
 
-`raw.eth_ohlcv` 테이블 하나를 **단일 진실 공급원(Single Source of Truth)** 으로 씁니다.
+`raw.eth_ohlcv` 테이블 하나를 **단일 진실 공급원**으로 사용합니다.
 
 - Binance에서 **15m 캔들만** 직접 수집
 - 1h, 4h, 6h, 24h는 DB에서 SQL 집계로 파생
 
-**집계 규칙:**
-```
-open   → bucket 내 첫 번째 open
-high   → MAX(high)
-low    → MIN(low)
-close  → bucket 내 마지막 close
-volume → SUM(volume)
-```
-
-수집 주기: 5분마다 Airflow DAG 실행, gap 구간 자동 백필
+수집 주기: 5분마다 Airflow DAG, gap 구간 자동 백필
 
 ---
 
-### 2. 기술 지표 계산 (`pipelines/features/technical_indicators.py`)
+### 2. 기술 지표 (`pipelines/features/technical_indicators.py`)
 
-매시간 Airflow가 아래 15개 이상의 지표를 계산해 DB에 저장합니다.
+매시간 계산 후 `features.eth_features` 테이블에 저장됩니다.
 
 | 지표 | 설명 |
 |------|------|
-| RSI(14) | 과매수/과매도 판단 (70↑: 과매수, 30↓: 과매도) |
-| MACD | 추세 방향과 모멘텀 강도 |
-| Bollinger Bands | 가격의 표준편차 기반 상/중/하단 밴드 |
-| ATR(14) | 현재 시장 평균 변동량 |
+| RSI(14) | 과매수/과매도 (70↑: 과매수, 30↓: 과매도) |
+| MACD | 추세 방향 + 모멘텀 강도 |
+| Bollinger Bands | 상/중/하단 밴드 + %B |
+| ATR(14) | 시장 평균 변동폭 (TP/SL 기준) |
 | OBV | 거래량 기반 매수/매도 세기 |
-| EMA 20/50/200 | 단기/중기/장기 이동평균 |
-| Stochastic | 모멘텀 지표 |
-| Williams %R | 단기 과매수/과매도 |
-| CCI | 추세 사이클 지표 |
-| 거래량 변화율 | 급등락 거래량 탐지 |
-
-**변동성 레짐 분류:**
-```
-ATR% = ATR / 현재가
-
-Low Vol    → 하위 33%: 신호 필터 강화 (조건을 더 엄격하게)
-Medium Vol → 중간 구간: 정상 조건
-High Vol   → 상위 33%: 노이즈 많음, 신호 신뢰도 낮춤
-```
+| VWAP | 거래량 가중 평균 가격 |
+| Stochastic %K/%D | 모멘텀 과매수/과매도 |
+| EMA 20/50/200 | 단기/중기/장기 추세 |
+| 변동성 레짐 | ATR% 기준 Low / Mid / High 분류 |
 
 ---
 
 ### 3. ML 분류 모델 (`ml/train_ml_classifier.py`)
 
-**목표:** "다음 1시간 후 가격이 오를까, 내릴까?"를 분류하는 이진 분류기
+**목표:** "다음 N시간 후 가격이 오를까 내릴까?" 이진 분류
 
-**모델 선택:**
-- XGBoost와 LightGBM 동시에 학습
-- Cross-validation F1 스코어 비교 후 **더 좋은 모델 자동 선택**
-
-**학습 방식 (시계열 무결성 유지):**
-```
-과거 ──────────────────→ 미래
-[학습 구간] [검증 구간]   (항상 이 순서)
-
-절대로 미래 데이터로 과거를 학습하지 않음 (Data Leakage 방지)
-```
-
-**출력 예시:**
-```json
-{
-  "direction": "up",
-  "prob_up": 0.71,
-  "prob_down": 0.29
-}
-```
+- XGBoost / LightGBM 동시 학습 후 Cross-validation F1 기준 자동 선택
+- 시계열 무결성 유지: 항상 과거→미래 방향으로 학습/검증 분할
 
 ---
 
 ### 4. ARIMA 예측 (`ml/train_arima.py`)
 
-가격의 **다음 N스텝 밴드**를 예측합니다.
-
-```
-현재가:   2,300
-예측 밴드: 2,285 ~ 2,340 (신뢰구간 95%)
-방향 확률: Up 62%, Down 38%
-```
-
-차트에 주황색 점선(예측선) + 반투명 밴드(신뢰구간)로 시각화됩니다.
+다음 N스텝의 가격 밴드를 예측하고 차트에 점선 + 신뢰구간으로 표시합니다.
 
 ---
 
 ### 5. 앙상블 신호 (`services/api/app/core/ensemble_service.py`)
 
-ARIMA, ML, 멀티타임프레임 세 가지를 **가중 합산**해 최종 신호를 생성합니다.
-
 ```
-최종 스코어 = 0.30 × ARIMA 신호
-            + 0.40 × ML 신호
+최종 스코어 = 0.30 × ARIMA 방향
+            + 0.40 × ML 방향
             + 0.20 × 1h MTF 신호
             + 0.10 × 4h MTF 신호
 
-예시 계산:
-  ARIMA up 62% → +0.186
-  ML    up 71% → +0.284
-  1h    상승   → +0.100
-  4h    상승   → +0.050
-  ─────────────────────
-  스코어 = +0.620
-
-스코어 > 0  → LONG
-스코어 < 0  → SHORT
-스코어 ≈ 0  → HOLD (신호 불명확)
+스코어 > threshold  → LONG
+스코어 < -threshold → SHORT
+그 외               → NO-TRADE
 ```
+
+계산 결과는 `features.ensemble_signals` 테이블에 자동 저장되며, 신호 히스토리 탭과 차트 마커(▲▼)에 활용됩니다.
 
 ---
 
-### 6. 멀티타임프레임 확인 (MTF)
+### 6. ATR 기반 동적 TP/SL
 
-15분 신호가 더 큰 추세와 같은 방향인지 확인합니다.
-
-```
-1시간봉: EMA20 vs EMA50 비교
-  EMA20 > EMA50 → 상승 추세 (Bull)
-  EMA20 < EMA50 → 하락 추세 (Bear)
-
-4시간봉도 동일 방법으로 확인
-
-결과:
-  1h Bull + 4h Bull → 신호 강화 (+)
-  1h Bear + 4h Bear → 신호 약화 (-)
-  엇갈리면          → 중립 (신호 보정)
-```
-
----
-
-### 7. ATR 기반 동적 TP/SL
-
-고정 퍼센트 대신 **시장 변동성(ATR)에 맞춰 자동 조정**합니다.
-
-**고정 방식의 문제:**
-```
-어떤 날이든: TP = 입장가 × 1.015, SL = 입장가 × 0.985
-→ 고변동성 날엔 SL에 바로 걸림
-→ 저변동성 날엔 TP가 너무 멀어 도달 못함
-```
-
-**ATR 동적 방식:**
 ```
 ATR(14) = 최근 14캔들 평균 변동폭
 
-TP = 입장가 + (2.0 × ATR)   ← 2배 변동폭만큼 위
-SL = 입장가 - (1.0 × ATR)   ← 1배 변동폭만큼 아래
-RR 비율 = 2:1 (고정)
+TP = 입장가 + (2.0 × ATR)
+SL = 입장가 - (1.0 × ATR)
+RR = 2:1 고정
 
-저변동성 시장 → ATR 작음 → TP/SL 좁게 (빠른 청산)
-고변동성 시장 → ATR 큼   → TP/SL 넓게 (흔들림에 강함)
+→ 저변동성: TP/SL 좁게 (빠른 청산)
+→ 고변동성: TP/SL 넓게 (흔들림에 강함)
 ```
 
 ---
 
-### 8. Half-Kelly 포지션 사이징
-
-"이 거래에 자금의 몇 %를 투입해야 수학적으로 최적인가?"를 계산합니다.
+### 7. Half-Kelly 포지션 사이징
 
 ```
-Kelly 공식:
-  K = (승률 × RR - 패율) / RR
-
-예시:
-  승률 = 65%, RR = 2:1, 패율 = 35%
-  K = (0.65 × 2 - 0.35) / 2 = 47.5%
-
-Half-Kelly (보수적 적용):
-  권장 사이징 = 47.5% ÷ 2 = 23.75%
-```
-
-UI의 SignalPanel에서 "Position Sizing: 23.75%" 형태로 표시됩니다.
-
----
-
-### 9. 백테스트 성과 지표
-
-단순 수익률 외에 다양한 리스크 조정 지표를 제공합니다.
-
-| 지표 | 의미 |
-|------|------|
-| Win Rate | 전체 거래 중 이익을 낸 비율 |
-| Profit Factor | 총 이익 ÷ 총 손실 (2.0↑ 우수) |
-| Payoff Ratio | 평균 이익 ÷ 평균 손실 |
-| Sharpe Ratio | 위험 대비 수익 (1.5↑ 양호) |
-| Sortino Ratio | 하방 위험만 반영한 Sharpe |
-| Calmar Ratio | 최대 낙폭(MDD) 대비 연 수익률 |
-| Max Drawdown | 고점 대비 최대 손실 낙폭 |
-| MAE / MAPE | 예측 가격 오차 |
-
----
-
-## UI 구성
-
-### 상단 바 (TopBar)
-
-```
-[ ETH/USDT ▼ ]  [ 15m ▼ ]  [ EMA 설정 ]  [ 새로고침 ]  [ Train 모델 ]
-```
-
-심볼, 타임프레임 전환 및 EMA 기간 커스텀, 모델 재학습 버튼
-
----
-
-### 메인 차트 (TradingChart)
-
-Apache ECharts 기반 캔들스틱 차트입니다.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│   ║  ║  ╫  ╫  ║  ║  (캔들스틱)                         │
-│   EMA 20 ─── EMA 50 ─── EMA 200 ───                    │
-│                               ~~~~~ (주황 예측선)       │
-│                          [===========] (신뢰구간 밴드)  │
-│─────────────────────────────────────────────────────────│
-│   Volume ▌▌▌▌▌▌▌▌▌▌ (서브패널)                         │
-└─────────────────────────────────────────────────────────┘
-```
-
-- 줌/팬 상태 zustand에 저장 → 새로고침 후에도 유지
-- 타임프레임 전환 시 차트 재마운트 없이 부드럽게 전환
-- `setOption(notMerge=false)` 기반 부분 업데이트
-
----
-
-### 신호 패널 (SignalPanel)
-
-```
-┌───────────────────────────────────┐
-│          SIGNAL (Ensemble)        │
-│              🟢 LONG              │
-├───────────────────────────────────┤
-│  Score          +0.523            │
-│  Confidence     52.3%             │
-├───────────────────────────────────┤
-│  ARIMA                            │
-│    Prob Up      68%               │
-│    Prob Down    32%               │
-├───────────────────────────────────┤
-│  ML Model                         │
-│    Direction    ▲ Up              │
-│    Prob Up      71%               │
-├───────────────────────────────────┤
-│  Multi-Timeframe                  │
-│    1h Signal    ▲ Bull            │
-│    4h Signal    ▲ Bull            │
-│    Vol Regime   🟢 Low Vol        │
-├───────────────────────────────────┤
-│  TP / SL (ATR 기반)               │
-│    Entry        2,300             │
-│    TP (2×ATR)   2,330   🟢        │
-│    SL (1×ATR)   2,285   🔴        │
-│    RR Ratio     2.0               │
-│    ATR(14)      15                │
-├───────────────────────────────────┤
-│  Position Sizing                  │
-│    Size (Kelly) 23.75%            │
-└───────────────────────────────────┘
+K = (승률 × RR - 패율) / RR
+권장 사이징 = K ÷ 2  (보수적 적용)
 ```
 
 ---
 
-### 우측 패널 (RightPanel)
+### 8. 리스크 계산기 (RiskCalculator)
 
-```
-현재 타임프레임: 1h
-마지막 가격:     2,318.40
-예측 방향:       ▲ Up
-신뢰구간:        2,285 ~ 2,340
-활성 모델 ID:    arima_eth_1h_v3
-학습 시각:       2026-03-11 08:00
-MAE:             12.4
-MAPE:            0.54%
-```
+앙상블 신호의 진입가/TP/SL을 자동으로 불러와 실시간 계산합니다.
 
----
-
-## Airflow DAG 스케줄
-
-| DAG | 스케줄 | 역할 |
-|-----|--------|------|
-| `ingestion_dag` | `*/5 * * * *` (5분) | Binance 15m 수집 |
-| `feature_pipeline_dag` | `0 * * * *` (매시간) | 기술 지표 계산 |
-| `ml_retrain_dag` | `0 */4 * * *` (4시간) | ML 모델 재학습 |
+| 항목 | 계산 방법 |
+|------|-----------|
+| 포지션 크기 | 계좌 × 리스크% ÷ SL거리 |
+| 증거금 필요 | 명목가치 ÷ 레버리지 |
+| 청산가 추정 | Isolated margin 기준 |
+| 수수료 | 테이커 0.05% × 왕복 2회 |
+| 기대값 (EV) | 승률 × 이익 − 패율 × 손실 − 수수료 |
 
 ---
 
@@ -385,35 +233,38 @@ MAPE:            0.54%
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/health` | 서버 상태 확인 |
-| GET | `/data/status?timeframe=1h&tz=Asia/Seoul` | 데이터 수집 상태 |
+| GET | `/health` | 서버 상태 |
+| GET | `/data/status` | 데이터 파이프라인 상태 |
 
 ### 가격 데이터
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/prices/history?timeframe=1h&limit=200` | 캔들 히스토리 |
-| GET | `/prices/latest?timeframe=15m&limit=1` | 최신 캔들 |
+| GET | `/prices/history?timeframe=15m&limit=500` | 캔들 히스토리 |
+| GET | `/prices/latest?timeframe=15m&limit=3` | 최신 캔들 |
 
-### 모델 / 신호
+### 모델 / 예측
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| POST | `/train` | 모델 학습 요청 |
-| GET | `/forecast?horizon_hours=6&timeframe=1h` | 가격 예측 |
-| GET | `/model/status` | 현재 모델 상태 |
+| POST | `/train` | 모델 학습 |
+| GET | `/forecast?horizon_hours=6&timeframe=15m` | 가격 예측 |
+| GET | `/model/status` | 현재 모델 정보 |
+| GET | `/models` | 등록된 모델 목록 |
 
-### 요청 예시
+### 신호 / 피처
 
-```bash
-# 모델 학습
-curl -X POST http://localhost:8000/train \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"ETH/USDT","timeframe":"1h","horizon_hours":6,"lookback_days":90}'
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/signals/ensemble?horizon_hours=6&timeframe=15m` | 최신 앙상블 신호 |
+| GET | `/signals/history?limit=200&signal_filter=all` | 과거 신호 목록 |
+| GET | `/features/latest?exchange=binance&symbol=ETH/USDT` | 최신 기술지표 값 |
 
-# 예측 조회
-curl "http://localhost:8000/forecast?horizon_hours=6&timeframe=1h&tz=Asia/Seoul"
-```
+### 백테스트
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/backtest/strategy?lookback_days=14&fee_bps=5` | 전략 백테스트 |
 
 ---
 
@@ -423,7 +274,7 @@ curl "http://localhost:8000/forecast?horizon_hours=6&timeframe=1h&tz=Asia/Seoul"
 
 ```bash
 cp .env.example .env
-# .env에 Binance API Key, DB 접속 정보 등 설정
+# .env에 DB 접속 정보, VITE_API_URL 등 설정
 ```
 
 ### 2. 전체 실행
@@ -432,29 +283,31 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+> **DB 마이그레이션 자동 처리:** API 컨테이너 시작 시 `migrations.py`가 실행되어 필요한 컬럼과 테이블을 자동으로 추가합니다. 별도 SQL 실행 불필요.
+
 | 서비스 | 주소 |
 |--------|------|
-| Web UI | http://localhost:3000 |
-| FastAPI | http://localhost:8000 |
+| 대시보드 (Web UI) | http://localhost:3000 |
+| FastAPI (Swagger) | http://localhost:8000/docs |
 | Airflow | http://localhost:8080 |
 | PostgreSQL | localhost:5432 |
 
 ### 3. 초기 확인
 
 ```bash
-# 데이터 수집 상태
-curl http://localhost:8000/data/status?timeframe=15m
+# 데이터 수집 상태 확인
+curl http://localhost:8000/data/status
 
-# 최근 캔들 확인
+# 최신 캔들 확인
 curl "http://localhost:8000/prices/latest?timeframe=15m&limit=3"
 
-# 모델 학습 (첫 실행 시)
+# 모델 학습 (첫 실행 시 필요)
 curl -X POST http://localhost:8000/train \
   -H "Content-Type: application/json" \
-  -d '{"symbol":"ETH/USDT","timeframe":"1h","horizon_hours":6}'
+  -d '{"symbol":"ETH/USDT","timeframe":"15m","horizon_hours":6,"lookback_days":30}'
 
-# 예측 확인
-curl "http://localhost:8000/forecast?horizon_hours=6&timeframe=1h"
+# 앙상블 신호 확인
+curl "http://localhost:8000/signals/ensemble?horizon_hours=6&timeframe=15m"
 ```
 
 ---
@@ -465,18 +318,28 @@ curl "http://localhost:8000/forecast?horizon_hours=6&timeframe=1h"
 |------|------|
 | 데이터 수집 | Python, ccxt (Binance) |
 | 워크플로 | Apache Airflow |
-| DB | PostgreSQL |
+| DB | PostgreSQL 15 |
 | ML | XGBoost, LightGBM, statsmodels (ARIMA) |
-| 백엔드 | FastAPI, SQLAlchemy |
+| 백엔드 | FastAPI, psycopg2 |
 | 프론트엔드 | React, Vite, Apache ECharts, zustand |
 | 인프라 | Docker Compose |
 
 ---
 
-## 성능 최적화 포인트
+## Airflow DAG 스케줄
 
-- **자동 갱신:** 마지막 캔들만 `PATCH`로 업데이트 (전체 리로드 없음)
+| DAG | 주기 | 역할 |
+|-----|------|------|
+| `ingestion_dag` | 5분 | Binance 15m 캔들 수집 |
+| `feature_pipeline_dag` | 매시간 | 기술 지표 계산 + DB 저장 |
+| `ml_retrain_dag` | 4시간 | ML 모델 재학습 |
+
+---
+
+## 성능 최적화
+
+- **15초 자동 갱신:** 마지막 캔들 3개만 폴링해 병합 (전체 재로드 없음)
 - **차트 전환:** `setOption(notMerge=false)`로 재마운트 없이 타임프레임 전환
-- **줌 상태 유지:** zustand에 `dataZoom` 상태 저장
-- **리샘플:** 거래소에 여러 타임프레임 요청 안 하고 DB에서 1회 파생
-- **모델 재학습:** 별도 DAG 분리 (4시간 주기, 메인 수집 DAG와 독립)
+- **줌 상태 유지:** zustand에 `dataZoom` viewport 저장
+- **리샘플:** 거래소에 여러 타임프레임 요청 없이 DB에서 1회 파생
+- **자동 마이그레이션:** API 시작 시 `ALTER TABLE IF NOT EXISTS`로 멱등성 보장

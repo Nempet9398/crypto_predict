@@ -1,368 +1,305 @@
-import React, { useMemo } from "react";
-import ReactECharts from "echarts-for-react";
-import { calculateBollinger, calculateEMA, calculateMACD, calculateRSI, calculateSMA } from "../utils/indicators";
+import {
+  createChart,
+  CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
+} from "lightweight-charts";
+import { useEffect, useRef, useCallback } from "react";
 
-function alignForecast(categories, points, key) {
-  const indexMap = new Map(categories.map((item, index) => [item, index]));
-  const values = new Array(categories.length).fill(null);
-  for (const point of points || []) {
-    const index = indexMap.get(point.ts);
-    if (index == null) continue;
-    values[index] = Number(point[key]);
-  }
-  return values;
+const UP_COLOR = "#26a69a";
+const DOWN_COLOR = "#ef5350";
+const GRID_COLOR = "rgba(255,255,255,0.05)";
+const TEXT_COLOR = "#d1d5db";
+const BG_COLOR = "#131722";
+const BORDER_COLOR = "rgba(255,255,255,0.1)";
+
+function toUnixTime(ts) {
+  if (!ts) return null;
+  return Math.floor(new Date(ts).getTime() / 1000);
 }
 
-function toSeriesData(values) {
-  return values.map((item) => (item == null ? "-" : Number(item)));
+function candleColor(open, close) {
+  return Number(close) >= Number(open) ? UP_COLOR : DOWN_COLOR;
 }
 
 export default function TradingChart({
-  history,
-  indicators,
-  forecastsByModel,
-  modelColors,
-  forecastVisibility,
-  activeModelId,
-  viewport,
-  onViewportChange,
-  onNeedOlderData,
+  history = [],
+  signal = null,
+  indicators = {},
 }) {
-  const categories = useMemo(() => {
-    const historyTs = history.map((item) => item.ts);
-    const forecastTs = [];
-    Object.values(forecastsByModel || {}).forEach((forecast) => {
-      (forecast?.points || []).forEach((point) => {
-        if (!historyTs.includes(point.ts) && !forecastTs.includes(point.ts)) forecastTs.push(point.ts);
-      });
-    });
-    return [...historyTs, ...forecastTs.sort((left, right) => new Date(left) - new Date(right))];
-  }, [history, forecastsByModel]);
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const seriesRef = useRef({});
+  const resizeObserverRef = useRef(null);
 
-  const categoryIndexMap = useMemo(
-    () => new Map(categories.map((value, index) => [value, index])),
-    [categories]
-  );
+  // ── 차트 초기화 ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
 
-  const option = useMemo(() => {
-    const closeValues = history.map((item) => Number(item.close));
-    const candleData = history.map((item) => [Number(item.open), Number(item.close), Number(item.low), Number(item.high)]);
-    const volumeData = history.map((item) => Number(item.volume));
-
-    const enabledIndicators = (indicators || []).filter((item) => item.enabled);
-    const mainIndicators = enabledIndicators.filter((item) => ["EMA", "SMA", "BB"].includes(item.type));
-    const rsiIndicators = enabledIndicators.filter((item) => item.type === "RSI");
-    const macdIndicators = enabledIndicators.filter((item) => item.type === "MACD");
-    const hasRsiPanel = rsiIndicators.length > 0;
-    const hasMacdPanel = macdIndicators.length > 0;
-
-    const panelNames = ["main", "volume", ...(hasRsiPanel ? ["rsi"] : []), ...(hasMacdPanel ? ["macd"] : [])];
-    const panelCount = panelNames.length;
-    const gap = 2;
-    const totalGap = (panelCount - 1) * gap;
-    const usable = 90 - totalGap;
-    const mainHeight = panelCount > 2 ? Math.max(42, usable * 0.62) : Math.max(56, usable * 0.7);
-    const secondaryHeight = panelCount > 1 ? (usable - mainHeight) / (panelCount - 1) : 0;
-
-    let topCursor = 5;
-    const gridByName = {};
-    panelNames.forEach((name, index) => {
-      const height = index === 0 ? mainHeight : secondaryHeight;
-      gridByName[name] = { top: `${topCursor}%`, height: `${height}%` };
-      topCursor += height + gap;
-    });
-
-    const grids = panelNames.map((name) => ({
-      left: 54,
-      right: 14,
-      top: gridByName[name].top,
-      height: gridByName[name].height,
-    }));
-
-    const xAxes = panelNames.map((_, index) => ({
-      type: "category",
-      gridIndex: index,
-      data: categories,
-      boundaryGap: true,
-      axisLine: { lineStyle: { color: "#2a3858" } },
-      axisTick: { show: false },
-      axisLabel: { color: "#8fa7cf", show: index === panelCount - 1 },
-      min: "dataMin",
-      max: "dataMax",
-    }));
-
-    const yAxes = panelNames.map((name, index) => ({
-      type: "value",
-      gridIndex: index,
-      scale: true,
-      axisLine: { lineStyle: { color: "#2a3858" } },
-      axisLabel: { color: "#8fa7cf" },
-      splitLine: { lineStyle: { color: "rgba(148,167,202,0.14)" } },
-      min: name === "rsi" ? 0 : null,
-      max: name === "rsi" ? 100 : null,
-    }));
-
-    const panelIndex = (name) => panelNames.indexOf(name);
-    const series = [
-      {
-        name: "Candles",
-        type: "candlestick",
-        xAxisIndex: panelIndex("main"),
-        yAxisIndex: panelIndex("main"),
-        data: candleData,
-        itemStyle: {
-          color: "#22c55e",
-          color0: "#ef4444",
-          borderColor: "#22c55e",
-          borderColor0: "#ef4444",
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { color: BG_COLOR },
+        textColor: TEXT_COLOR,
+        fontSize: 12,
+        fontFamily: "'Inter', 'SF Pro Display', sans-serif",
+      },
+      grid: {
+        vertLines: { color: GRID_COLOR },
+        horzLines: { color: GRID_COLOR },
+      },
+      crosshair: {
+        mode: 1, // CrosshairMode.Normal
+        vertLine: {
+          color: "rgba(255,255,255,0.3)",
+          width: 1,
+          style: 3,
+          labelBackgroundColor: "#2a2e39",
+        },
+        horzLine: {
+          color: "rgba(255,255,255,0.3)",
+          width: 1,
+          style: 3,
+          labelBackgroundColor: "#2a2e39",
         },
       },
-      {
-        name: "Volume",
-        type: "bar",
-        xAxisIndex: panelIndex("volume"),
-        yAxisIndex: panelIndex("volume"),
-        data: volumeData,
-        itemStyle: {
-          color: (params) => {
-            const candle = history[params?.dataIndex] || {};
-            return Number(candle.close) >= Number(candle.open) ? "rgba(34,197,94,0.52)" : "rgba(239,68,68,0.52)";
-          },
-        },
+      rightPriceScale: {
+        borderColor: BORDER_COLOR,
+        scaleMargins: { top: 0.1, bottom: 0.25 },
       },
-    ];
-
-    mainIndicators.forEach((indicator) => {
-      if (indicator.type === "EMA") {
-        series.push({
-          name: `EMA ${indicator.params.period}`,
-          type: "line",
-          xAxisIndex: panelIndex("main"),
-          yAxisIndex: panelIndex("main"),
-          showSymbol: false,
-          smooth: true,
-          lineStyle: { width: 1.5, color: indicator.color },
-          data: toSeriesData(calculateEMA(closeValues, Number(indicator.params.period) || 20)),
-        });
-      }
-      if (indicator.type === "SMA") {
-        series.push({
-          name: `SMA ${indicator.params.period}`,
-          type: "line",
-          xAxisIndex: panelIndex("main"),
-          yAxisIndex: panelIndex("main"),
-          showSymbol: false,
-          smooth: true,
-          lineStyle: { width: 1.5, color: indicator.color },
-          data: toSeriesData(calculateSMA(closeValues, Number(indicator.params.period) || 20)),
-        });
-      }
-      if (indicator.type === "BB") {
-        const period = Number(indicator.params.period) || 20;
-        const stddev = Number(indicator.params.stddev) || 2;
-        const bands = calculateBollinger(closeValues, period, stddev);
-        series.push(
-          {
-            name: `BB Mid ${period}`,
-            type: "line",
-            xAxisIndex: panelIndex("main"),
-            yAxisIndex: panelIndex("main"),
-            showSymbol: false,
-            lineStyle: { width: 1.2, color: indicator.color, opacity: 0.85 },
-            data: toSeriesData(bands.middle),
-          },
-          {
-            name: `BB Upper ${period}`,
-            type: "line",
-            xAxisIndex: panelIndex("main"),
-            yAxisIndex: panelIndex("main"),
-            showSymbol: false,
-            lineStyle: { width: 1, color: indicator.color, opacity: 0.5 },
-            data: toSeriesData(bands.upper),
-          },
-          {
-            name: `BB Lower ${period}`,
-            type: "line",
-            xAxisIndex: panelIndex("main"),
-            yAxisIndex: panelIndex("main"),
-            showSymbol: false,
-            lineStyle: { width: 1, color: indicator.color, opacity: 0.5 },
-            data: toSeriesData(bands.lower),
-          }
-        );
-      }
+      timeScale: {
+        borderColor: BORDER_COLOR,
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 5,
+        barSpacing: 8,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
     });
 
-    if (hasRsiPanel) {
-      rsiIndicators.forEach((indicator) => {
-        const period = Number(indicator.params.period) || 14;
-        series.push({
-          name: `RSI ${period}`,
-          type: "line",
-          xAxisIndex: panelIndex("rsi"),
-          yAxisIndex: panelIndex("rsi"),
-          showSymbol: false,
-          lineStyle: { width: 1.5, color: indicator.color },
-          data: toSeriesData(calculateRSI(closeValues, period)),
-          markLine: {
-            symbol: ["none", "none"],
-            lineStyle: { color: "rgba(148,167,202,0.45)", type: "dashed", width: 1 },
-            data: [{ yAxis: 30 }, { yAxis: 70 }],
-          },
-        });
-      });
-    }
-
-    if (hasMacdPanel) {
-      macdIndicators.forEach((indicator) => {
-        const fast = Number(indicator.params.fast) || 12;
-        const slow = Number(indicator.params.slow) || 26;
-        const signal = Number(indicator.params.signal) || 9;
-        const macd = calculateMACD(closeValues, fast, slow, signal);
-        series.push(
-          {
-            name: `MACD ${fast}/${slow}`,
-            type: "line",
-            xAxisIndex: panelIndex("macd"),
-            yAxisIndex: panelIndex("macd"),
-            showSymbol: false,
-            lineStyle: { width: 1.5, color: indicator.color },
-            data: toSeriesData(macd.macdLine),
-          },
-          {
-            name: `MACD Signal ${signal}`,
-            type: "line",
-            xAxisIndex: panelIndex("macd"),
-            yAxisIndex: panelIndex("macd"),
-            showSymbol: false,
-            lineStyle: { width: 1.2, color: "#f472b6" },
-            data: toSeriesData(macd.signalLine),
-          },
-          {
-            name: `MACD Hist ${fast}/${slow}`,
-            type: "bar",
-            xAxisIndex: panelIndex("macd"),
-            yAxisIndex: panelIndex("macd"),
-            itemStyle: {
-              color: (params) => (Number(params.value || 0) >= 0 ? "rgba(34,197,94,0.5)" : "rgba(239,68,68,0.5)"),
-            },
-            data: toSeriesData(macd.histogram),
-          }
-        );
-      });
-    }
-
-    Object.entries(forecastsByModel || {}).forEach(([modelId, forecast]) => {
-      if (!forecastVisibility[modelId]) return;
-      const color = modelColors[modelId] || "#38bdf8";
-      const mean = toSeriesData(alignForecast(categories, forecast?.points || [], "pred_close"));
-      series.push({
-        name: `Forecast ${modelId.slice(-6)}`,
-        type: "line",
-        xAxisIndex: panelIndex("main"),
-        yAxisIndex: panelIndex("main"),
-        showSymbol: false,
-        smooth: true,
-        lineStyle: { width: 2, type: "dashed", color },
-        data: mean,
-      });
-
-      if (modelId === activeModelId) {
-        const lower = alignForecast(categories, forecast?.points || [], "pred_low");
-        const upper = alignForecast(categories, forecast?.points || [], "pred_high");
-        const band = upper.map((value, index) => (value == null || lower[index] == null ? null : Number(value) - Number(lower[index])));
-        series.push(
-          {
-            name: "Band Lower",
-            type: "line",
-            xAxisIndex: panelIndex("main"),
-            yAxisIndex: panelIndex("main"),
-            stack: "active-band",
-            lineStyle: { width: 0, opacity: 0 },
-            showSymbol: false,
-            data: toSeriesData(lower),
-          },
-          {
-            name: "Band Width",
-            type: "line",
-            xAxisIndex: panelIndex("main"),
-            yAxisIndex: panelIndex("main"),
-            stack: "active-band",
-            lineStyle: { width: 0, opacity: 0 },
-            areaStyle: { color: "rgba(56,189,248,0.14)" },
-            showSymbol: false,
-            data: toSeriesData(band),
-          }
-        );
-      }
+    // ── 캔들스틱 ──────────────────────────────────────────────────────────
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: UP_COLOR,
+      downColor: DOWN_COLOR,
+      borderUpColor: UP_COLOR,
+      borderDownColor: DOWN_COLOR,
+      wickUpColor: UP_COLOR,
+      wickDownColor: DOWN_COLOR,
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
 
-    const hasViewport = viewport.startValue != null && viewport.endValue != null;
-    return {
-      animationDurationUpdate: 260,
-      backgroundColor: "transparent",
-      legend: { top: 4, textStyle: { color: "#9fb0d3" } },
-      axisPointer: { link: [{ xAxisIndex: panelNames.map((_, index) => index) }], label: { backgroundColor: "#111b2f" } },
-      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-      grid: grids,
-      xAxis: xAxes,
-      yAxis: yAxes,
-      dataZoom: [
-        {
-          type: "inside",
-          xAxisIndex: panelNames.map((_, index) => index),
-          ...(hasViewport ? { startValue: viewport.startValue, endValue: viewport.endValue } : { start: 70, end: 100 }),
-        },
-        {
-          type: "slider",
-          xAxisIndex: panelNames.map((_, index) => index),
-          bottom: 4,
-          height: 18,
-          borderColor: "#2a3858",
-          backgroundColor: "#0a1224",
-          fillerColor: "rgba(56,189,248,0.2)",
-          handleStyle: { color: "#38bdf8" },
-          textStyle: { color: "#9fb0d3" },
-          ...(hasViewport ? { startValue: viewport.startValue, endValue: viewport.endValue } : { start: 70, end: 100 }),
-        },
-      ],
-      series,
+    // ── 거래량 (별도 패널) ───────────────────────────────────────────────
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: "rgba(38, 166, 154, 0.4)",
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.80, bottom: 0 },
+    });
+
+    seriesRef.current = { chart, candleSeries, volumeSeries };
+    chartRef.current = chart;
+
+    // ── ResizeObserver로 반응형 ─────────────────────────────────────────
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry && chart) {
+        chart.applyOptions({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(containerRef.current);
+    resizeObserverRef.current = observer;
+
+    return () => {
+      observer.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = {};
     };
-  }, [history, indicators, forecastsByModel, modelColors, forecastVisibility, activeModelId, viewport, categories]);
+  }, []);
 
-  const onEvents = useMemo(
-    () => ({
-      datazoom: (event) => {
-        const payload = Array.isArray(event?.batch) && event.batch.length ? event.batch[0] : event;
-        const length = categories.length;
-        if (!length) return;
+  // ── 데이터 업데이트 ───────────────────────────────────────────────────────
+  useEffect(() => {
+    const { candleSeries, volumeSeries, chart } = seriesRef.current;
+    if (!candleSeries || !history.length) return;
 
-        const toIndex = (value, fallbackPercent) => {
-          if (typeof value === "number" && Number.isFinite(value)) {
-            return Math.max(0, Math.min(length - 1, Math.round(value)));
-          }
-          if (typeof value === "string") {
-            const idx = categoryIndexMap.get(value);
-            if (typeof idx === "number") return idx;
-          }
-          const percent = Number(fallbackPercent ?? 0);
-          return Math.max(0, Math.min(length - 1, Math.round((percent / 100) * (length - 1))));
+    const candles = history
+      .map((bar) => {
+        const time = toUnixTime(bar.ts);
+        if (!time) return null;
+        return {
+          time,
+          open: Number(bar.open),
+          high: Number(bar.high),
+          low: Number(bar.low),
+          close: Number(bar.close),
         };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.time - b.time);
 
-        const startIndex = toIndex(payload?.startValue, payload?.start);
-        const endIndex = toIndex(payload?.endValue, payload?.end);
-        const nextStart = categories[Math.min(startIndex, endIndex)] || null;
-        const nextEnd = categories[Math.max(startIndex, endIndex)] || null;
+    const volumes = history
+      .map((bar) => {
+        const time = toUnixTime(bar.ts);
+        if (!time) return null;
+        const isUp = Number(bar.close) >= Number(bar.open);
+        return {
+          time,
+          value: Number(bar.volume),
+          color: isUp ? "rgba(38,166,154,0.5)" : "rgba(239,83,80,0.5)",
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.time - b.time);
 
-        if (nextStart == null || nextEnd == null) return;
-        if (viewport.startValue !== nextStart || viewport.endValue !== nextEnd) {
-          onViewportChange?.({ startValue: nextStart, endValue: nextEnd });
-        }
-        if (Math.min(startIndex, endIndex) <= 25) onNeedOlderData?.();
-      },
-    }),
-    [categories, categoryIndexMap, onNeedOlderData, onViewportChange, viewport.endValue, viewport.startValue]
+    try {
+      candleSeries.setData(candles);
+      volumeSeries.setData(volumes);
+    } catch {
+      // 중복 타임스탬프 등의 에러 무시
+    }
+  }, [history]);
+
+  // ── 지표 오버레이 (EMA/SMA) ───────────────────────────────────────────────
+  useEffect(() => {
+    const { chart } = seriesRef.current;
+    if (!chart || !history.length) return;
+
+    // 기존 지표 시리즈 제거
+    const toRemove = [];
+    for (const key of Object.keys(seriesRef.current)) {
+      if (key.startsWith("ind_")) toRemove.push(key);
+    }
+    toRemove.forEach((key) => {
+      try { chart.removeSeries(seriesRef.current[key]); } catch {}
+      delete seriesRef.current[key];
+    });
+
+    if (!indicators) return;
+    const closes = history.map((b) => Number(b.close));
+    const times = history.map((b) => toUnixTime(b.ts)).filter(Boolean);
+
+    const addLine = (key, values, color, width = 1.5) => {
+      const series = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: width,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      const data = values
+        .map((v, i) => ({ time: times[i], value: v }))
+        .filter((d) => d.time && d.value != null && !isNaN(d.value));
+      try { series.setData(data); } catch {}
+      seriesRef.current[key] = series;
+    };
+
+    if (indicators.ema20) {
+      addLine("ind_ema20", calcEMA(closes, 20), "#f59e0b");
+    }
+    if (indicators.ema50) {
+      addLine("ind_ema50", calcEMA(closes, 50), "#8b5cf6");
+    }
+    if (indicators.ema200) {
+      addLine("ind_ema200", calcEMA(closes, 200), "#3b82f6");
+    }
+    if (indicators.sma20) {
+      addLine("ind_sma20", calcSMA(closes, 20), "#10b981", 1);
+    }
+    if (indicators.bb) {
+      const { upper, middle, lower } = calcBB(closes, 20, 2);
+      addLine("ind_bb_upper", upper, "rgba(148,163,184,0.6)", 1);
+      addLine("ind_bb_mid", middle, "rgba(148,163,184,0.4)", 1);
+      addLine("ind_bb_lower", lower, "rgba(148,163,184,0.6)", 1);
+    }
+  }, [history, indicators]);
+
+  // ── 신호 마커 ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const { candleSeries } = seriesRef.current;
+    if (!candleSeries || !signal) return;
+    // 현재 신호를 마지막 캔들에 표시
+    const last = history[history.length - 1];
+    if (!last) return;
+    const time = toUnixTime(last.ts);
+    if (!time) return;
+
+    const markers = [];
+    if (signal.signal === "long") {
+      markers.push({
+        time,
+        position: "belowBar",
+        color: UP_COLOR,
+        shape: "arrowUp",
+        text: "LONG",
+        size: 2,
+      });
+    } else if (signal.signal === "short") {
+      markers.push({
+        time,
+        position: "aboveBar",
+        color: DOWN_COLOR,
+        shape: "arrowDown",
+        text: "SHORT",
+        size: 2,
+      });
+    }
+    try { candleSeries.setMarkers(markers); } catch {}
+  }, [signal, history]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: "100%", height: "100%", position: "relative" }}
+    />
   );
+}
 
-  return <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge={false} lazyUpdate={true} onEvents={onEvents} />;
+// ── 지표 계산 (순수 함수) ──────────────────────────────────────────────────
+function calcEMA(closes, period) {
+  const result = new Array(closes.length).fill(null);
+  const k = 2 / (period + 1);
+  let ema = null;
+  for (let i = 0; i < closes.length; i++) {
+    if (ema === null) {
+      if (i < period - 1) continue;
+      ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    } else {
+      ema = closes[i] * k + ema * (1 - k);
+    }
+    result[i] = ema;
+  }
+  return result;
+}
+
+function calcSMA(closes, period) {
+  return closes.map((_, i) => {
+    if (i < period - 1) return null;
+    return closes.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
+  });
+}
+
+function calcBB(closes, period = 20, stddev = 2) {
+  const sma = calcSMA(closes, period);
+  const upper = closes.map((_, i) => {
+    if (sma[i] == null) return null;
+    const slice = closes.slice(Math.max(0, i - period + 1), i + 1);
+    const mean = sma[i];
+    const variance = slice.reduce((acc, v) => acc + (v - mean) ** 2, 0) / slice.length;
+    return mean + stddev * Math.sqrt(variance);
+  });
+  const lower = closes.map((_, i) => {
+    if (sma[i] == null) return null;
+    const slice = closes.slice(Math.max(0, i - period + 1), i + 1);
+    const mean = sma[i];
+    const variance = slice.reduce((acc, v) => acc + (v - mean) ** 2, 0) / slice.length;
+    return mean - stddev * Math.sqrt(variance);
+  });
+  return { upper, middle: sma, lower };
 }

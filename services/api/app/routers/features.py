@@ -12,7 +12,11 @@ SYMBOL = "ETH/USDT"
 def latest_features():
     row = fetch_one(
         """
-        SELECT ts, close, returns_1h, sma_5, sma_10, ema_10, volatility_10
+        SELECT ts, close, returns_1h, sma_5, sma_10, ema_10, volatility_10,
+               rsi_14, macd_line, macd_signal, macd_hist,
+               bb_upper, bb_middle, bb_lower, bb_width, bb_pct,
+               atr_14, atr_pct, obv, vwap, stoch_k, stoch_d,
+               vol_regime, signal_1h, signal_4h
         FROM features.eth_features
         WHERE exchange = %s AND symbol = %s
         ORDER BY ts DESC

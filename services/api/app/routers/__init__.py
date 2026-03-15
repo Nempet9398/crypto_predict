@@ -1,3 +1,3 @@
-from app.routers import data, health, model, prices
+from app.routers import data, health, prices, features, signals
 
-__all__ = ["data", "health", "model", "prices"]
+__all__ = ["data", "health", "prices", "features", "signals"]

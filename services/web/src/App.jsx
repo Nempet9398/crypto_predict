@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import AccuracyPanel from "./components/AccuracyPanel";
+import BacktestPanel from "./components/BacktestPanel";
 import IndicatorManagerModal from "./components/IndicatorManagerModal";
 import MarketStatsBar from "./components/MarketStatsBar";
 import ModelDataStatusPanel from "./components/ModelDataStatusPanel";
@@ -31,6 +32,7 @@ function mergeLatest(history, latest) {
 
 const BOTTOM_TABS = [
   { key: "accuracy", label: "예측 정확도" },
+  { key: "backtest", label: "백테스트" },
   { key: "signals", label: "신호 이력" },
   { key: "status", label: "시스템 상태" },
 ];
@@ -170,6 +172,7 @@ export default function App() {
         </div>
         <div className="bottom-content">
           {activeTab === "accuracy" && <AccuracyPanel />}
+          {activeTab === "backtest" && <BacktestPanel timeframe={timeframe} />}
           {activeTab === "signals" && <SignalHistoryPanel signals={signalHistory} />}
           {activeTab === "status" && <ModelDataStatusPanel dataStatus={dataStatus} mlStatus={mlStatus} />}
         </div>

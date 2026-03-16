@@ -6,14 +6,24 @@ Reads 15m OHLCV from raw.eth_ohlcv and computes:
   - Volatility regime (low/medium/high)
   - Multi-timeframe signals (1h, 4h via pandas resample)
   - ML classification target (4-bar forward direction)
+  - ML regression targets: forward returns at 1h/3h/6h horizons
+
+Incremental mode (--incremental):
+  Uses pipeline.water_marks HWM to process only new rows.
+  Queries ts >= (last_ts - WARMUP_BARS*15min) for rolling indicator warmup,
+  then UPSERTs only rows with ts > last_ts.
 """
+import argparse
 import os
-from datetime import timezone
+from datetime import timedelta, timezone
 
 import numpy as np
 import pandas as pd
 import psycopg2
 import psycopg2.extras
+
+# Rolling warmup bars needed for vol_regime (30-day rolling quantile)
+WARMUP_BARS = 2880  # 30 days * 96 bars/day at 15m
 
 
 def get_env(name, default=None):
@@ -21,6 +31,43 @@ def get_env(name, default=None):
     if value is None:
         raise RuntimeError(f"Missing env var: {name}")
     return value
+
+
+def get_db_conn():
+    return psycopg2.connect(
+        host=get_env("DB_HOST"),
+        port=int(get_env("DB_PORT", "5432")),
+        user=get_env("DB_USER"),
+        password=get_env("DB_PASSWORD"),
+        dbname=get_env("DB_NAME"),
+    )
+
+
+def get_water_mark(conn, pipeline_name: str):
+    """Return last_ts from pipeline.water_marks, or None if not found."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT last_ts FROM pipeline.water_marks WHERE pipeline_name = %s",
+            (pipeline_name,)
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_water_mark(conn, pipeline_name: str, last_ts, rows_processed: int):
+    """Upsert pipeline.water_marks with new last_ts."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO pipeline.water_marks (pipeline_name, last_ts, rows_processed, run_count, updated_at)
+            VALUES (%s, %s, %s, 1, NOW())
+            ON CONFLICT (pipeline_name)
+            DO UPDATE SET
+                last_ts        = EXCLUDED.last_ts,
+                rows_processed = pipeline.water_marks.rows_processed + EXCLUDED.rows_processed,
+                run_count      = pipeline.water_marks.run_count + 1,
+                updated_at     = NOW()
+        """, (pipeline_name, last_ts, rows_processed))
+    conn.commit()
 
 
 # ── Pure pandas/numpy indicator functions ──────────────────────────────────────
@@ -121,29 +168,66 @@ def compute_target_direction(close: pd.Series, n_bars: int = 4,
     return target
 
 
+def compute_target_returns(close: pd.Series) -> dict:
+    """
+    Regression targets: forward returns at 1h/3h/6h horizons (based on 15m bars).
+    Returns dict of {col_name: pd.Series}.
+    """
+    horizons = {"1h": 4, "3h": 12, "6h": 24}
+    return {
+        f"target_return_{h}": (close.shift(-n) / close) - 1.0
+        for h, n in horizons.items()
+    }
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--incremental", action="store_true",
+                        help="Use High Water Mark to process only new rows")
+    args = parser.parse_args()
+
     exchange_name = get_env("EXCHANGE", "binance")
     symbol = get_env("SYMBOL", "ETH/USDT")
-    db_host = get_env("DB_HOST")
-    db_port = int(get_env("DB_PORT", "5432"))
-    db_user = get_env("DB_USER")
-    db_pass = get_env("DB_PASSWORD")
-    db_name = get_env("DB_NAME")
 
-    conn = psycopg2.connect(
-        host=db_host, port=db_port, user=db_user, password=db_pass, dbname=db_name,
-    )
+    conn = get_db_conn()
 
-    # Read raw 15m OHLCV (need high/low/volume for ATR, OBV, VWAP, Stochastic)
-    query = """
-        SELECT ts, open, high, low, close, volume
-        FROM raw.eth_ohlcv
-        WHERE exchange = %s AND symbol = %s AND timeframe = '15m'
-        ORDER BY ts
-    """
-    df = pd.read_sql(query, conn, params=(exchange_name, symbol))
+    # Determine query range
+    watermark_ts = None
+    if args.incremental:
+        watermark_ts = get_water_mark(conn, "feature_pipeline")
+        if watermark_ts:
+            # Fetch warmup buffer so rolling indicators are accurate
+            from_ts = watermark_ts - timedelta(minutes=15 * WARMUP_BARS)
+            print(f"[technical_indicators] Incremental mode: from {from_ts} (HWM={watermark_ts})")
+            query = """
+                SELECT ts, open, high, low, close, volume
+                FROM raw.eth_ohlcv
+                WHERE exchange = %s AND symbol = %s AND timeframe = '15m'
+                  AND ts >= %s
+                ORDER BY ts
+            """
+            df = pd.read_sql(query, conn, params=(exchange_name, symbol, from_ts))
+        else:
+            print("[technical_indicators] Incremental mode: no HWM found, running full load")
+            query = """
+                SELECT ts, open, high, low, close, volume
+                FROM raw.eth_ohlcv
+                WHERE exchange = %s AND symbol = %s AND timeframe = '15m'
+                ORDER BY ts
+            """
+            df = pd.read_sql(query, conn, params=(exchange_name, symbol))
+    else:
+        print("[technical_indicators] Full mode: processing all rows")
+        query = """
+            SELECT ts, open, high, low, close, volume
+            FROM raw.eth_ohlcv
+            WHERE exchange = %s AND symbol = %s AND timeframe = '15m'
+            ORDER BY ts
+        """
+        df = pd.read_sql(query, conn, params=(exchange_name, symbol))
+
     if df.empty:
         conn.close()
         return
@@ -185,7 +269,22 @@ def main():
     # ── ML classification target ──────────────────────────────────────────────
     df["target_direction"] = compute_target_direction(close)
 
+    # ── ML regression targets (forward returns) ───────────────────────────────
+    for col, series in compute_target_returns(close).items():
+        df[col] = series
+
     df = df.reset_index()
+
+    # In incremental mode, only upsert rows newer than the HWM
+    if args.incremental and watermark_ts is not None:
+        watermark_ts_utc = watermark_ts.replace(tzinfo=timezone.utc) if watermark_ts.tzinfo is None else watermark_ts
+        df = df[df["ts"] > watermark_ts_utc]
+        print(f"[technical_indicators] Incremental: {len(df)} new rows to upsert")
+
+    if df.empty:
+        print("[technical_indicators] No new rows to process")
+        conn.close()
+        return
 
     rows = []
     for _, row in df.iterrows():
@@ -211,7 +310,7 @@ def main():
             float(row["sma_10"]),
             float(row["ema_10"]),
             float(row["volatility_10"]),
-            # new
+            # extended indicators
             _f("rsi_14"),
             _f("macd_line"),
             _f("macd_signal"),
@@ -231,6 +330,10 @@ def main():
             _i("signal_1h"),
             _i("signal_4h"),
             _i("target_direction"),
+            # regression targets
+            _f("target_return_1h"),
+            _f("target_return_3h"),
+            _f("target_return_6h"),
         ))
 
     insert_sql = """
@@ -240,7 +343,8 @@ def main():
             rsi_14, macd_line, macd_signal, macd_hist,
             bb_upper, bb_middle, bb_lower, bb_width, bb_pct,
             atr_14, atr_pct, obv, vwap, stoch_k, stoch_d,
-            vol_regime, signal_1h, signal_4h, target_direction
+            vol_regime, signal_1h, signal_4h, target_direction,
+            target_return_1h, target_return_3h, target_return_6h
         )
         VALUES %s
         ON CONFLICT (exchange, symbol, ts)
@@ -270,14 +374,21 @@ def main():
             signal_1h       = EXCLUDED.signal_1h,
             signal_4h       = EXCLUDED.signal_4h,
             target_direction = EXCLUDED.target_direction,
+            target_return_1h = EXCLUDED.target_return_1h,
+            target_return_3h = EXCLUDED.target_return_3h,
+            target_return_6h = EXCLUDED.target_return_6h,
             feature_created_at = NOW()
     """
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(cur, insert_sql, rows)
     conn.commit()
+
+    # Update High Water Mark
+    max_ts = df["ts"].max()
+    set_water_mark(conn, "feature_pipeline", max_ts, len(rows))
     conn.close()
-    print(f"[technical_indicators] Upserted {len(rows)} rows for {symbol}")
+    print(f"[technical_indicators] Upserted {len(rows)} rows for {symbol} (HWM → {max_ts})")
 
 
 if __name__ == "__main__":

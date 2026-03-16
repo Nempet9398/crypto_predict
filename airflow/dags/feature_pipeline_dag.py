@@ -26,7 +26,8 @@ def resample_task():
 
 
 def feature_task():
-    run_script("pipelines/features/technical_indicators.py")
+    """Run technical indicators with incremental HWM mode to process only new rows."""
+    run_script("pipelines/features/technical_indicators.py", extra_args=["--incremental"])
 
 
 def train_arima_task():
@@ -39,6 +40,14 @@ def train_ml_task():
         run_script("ml/train_ml_classifier.py")
     except subprocess.CalledProcessError:
         pass  # Non-fatal: ensemble falls back to ARIMA-only if ML unavailable
+
+
+def train_ml_regressor_task():
+    """Train XGBoost/LightGBM quantile regression models for 1h/3h/6h horizons."""
+    try:
+        run_script("ml/train_ml_regressor.py")
+    except subprocess.CalledProcessError:
+        pass  # Non-fatal: ensemble falls back gracefully
 
 
 def ensemble_signal_task():
@@ -66,12 +75,12 @@ def make_dag():
         resample = PythonOperator(task_id="resample_1h", python_callable=resample_task)
         features = PythonOperator(task_id="generate_features", python_callable=feature_task)
         train_ml = PythonOperator(task_id="train_ml_classifier", python_callable=train_ml_task)
+        train_ml_reg = PythonOperator(task_id="train_ml_regressor", python_callable=train_ml_regressor_task)
         train_arima = PythonOperator(task_id="train_arima_model", python_callable=train_arima_task)
         ensemble = PythonOperator(task_id="compute_ensemble_signals", python_callable=ensemble_signal_task)
 
-        # ML retraining is expensive — runs every hour but is skipped gracefully if needed
-        # Chain: ingest → resample → features → [train_ml, train_arima] → ensemble
-        ingest >> resample >> features >> [train_ml, train_arima] >> ensemble
+        # Chain: ingest → resample → features(incremental) → [train_ml, train_ml_regressor, train_arima] → ensemble
+        ingest >> resample >> features >> [train_ml, train_ml_reg, train_arima] >> ensemble
 
     return dag
 

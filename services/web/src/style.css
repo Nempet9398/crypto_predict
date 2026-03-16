@@ -568,3 +568,43 @@ html, body, #root {
 .bt-footer { font-size: 11px; color: var(--text-secondary); text-align: right; }
 .ret-pos { color: #4ade80; }
 .ret-neg { color: #f87171; }
+
+/* ── ML 회귀 예측 / CI 바 ─────────────────────────────────────────────────── */
+.sub-tag {
+  display: inline-block; margin-left: 6px;
+  font-size: 10px; font-weight: 500; color: var(--accent);
+  background: rgba(56,189,248,0.12); border-radius: 3px; padding: 1px 5px;
+  vertical-align: middle;
+}
+.reg-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; padding: 2px 0;
+}
+.reg-label { color: var(--text-secondary); }
+.ci-bar-wrap { padding: 4px 0 6px; }
+.ci-bar-track {
+  position: relative; height: 8px;
+  background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden;
+}
+.ci-bar-fill {
+  position: absolute; top: 0; height: 100%; border-radius: 4px; opacity: 0.7;
+}
+.ci-bar-fill.ci-pos { background: #10b981; }
+.ci-bar-fill.ci-neg { background: #ef4444; }
+.ci-bar-mid {
+  position: absolute; top: 0; width: 2px; height: 100%;
+  background: #fff; opacity: 0.9; transform: translateX(-50%);
+}
+.ci-bar-zero {
+  position: absolute; top: 0; width: 1px; height: 100%;
+  background: rgba(255,255,255,0.25); transform: translateX(-50%);
+}
+.ci-labels {
+  display: flex; justify-content: space-between;
+  font-size: 10px; margin-top: 2px;
+}
+.ci-bound { color: var(--text-secondary); }
+.ci-tight { color: #4ade80; font-weight: 600; }
+.ci-medium { color: #facc15; }
+.ci-wide { color: #f87171; }
+.ci-hint { font-size: 10px; opacity: 0.8; }

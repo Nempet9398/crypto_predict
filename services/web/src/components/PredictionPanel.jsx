@@ -6,6 +6,43 @@ function pctFmt(v) {
   return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
 }
 
+function retFmt(v, digits = 3) {
+  if (v == null || Number.isNaN(Number(v))) return "—";
+  const n = Number(v) * 100;
+  return (n >= 0 ? "+" : "") + n.toFixed(digits) + "%";
+}
+
+// 분위수 신뢰구간 시각화 바
+function CIBar({ lower, median, upper }) {
+  if (lower == null || upper == null) return null;
+  const lo = Number(lower) * 100;
+  const mid = Number(median) * 100;
+  const hi = Number(upper) * 100;
+  const total = Math.max(Math.abs(lo), Math.abs(hi)) * 2 || 1;
+  const zeroPos = 50;
+  const loPos = zeroPos + (lo / total) * 50;
+  const hiPos = zeroPos + (hi / total) * 50;
+  const midPos = zeroPos + (mid / total) * 50;
+  const barLeft = Math.min(loPos, hiPos);
+  const barWidth = Math.abs(hiPos - loPos);
+  const isPos = mid >= 0;
+  return (
+    <div className="ci-bar-wrap" title={`CI: [${lo.toFixed(3)}%, ${hi.toFixed(3)}%]`}>
+      <div className="ci-bar-track">
+        <div className={"ci-bar-fill " + (isPos ? "ci-pos" : "ci-neg")}
+          style={{ left: barLeft + "%", width: Math.max(barWidth, 1) + "%" }} />
+        <div className="ci-bar-mid" style={{ left: midPos + "%" }} />
+        <div className="ci-bar-zero" style={{ left: zeroPos + "%" }} />
+      </div>
+      <div className="ci-labels">
+        <span className="ci-bound">{lo.toFixed(2)}%</span>
+        <span className={isPos ? "ret-pos" : "ret-neg"}>{retFmt(median)}</span>
+        <span className="ci-bound">{hi.toFixed(2)}%</span>
+      </div>
+    </div>
+  );
+}
+
 function probBar(prob, color) {
   const w = Math.round((prob || 0) * 100);
   return (
@@ -39,6 +76,8 @@ export default function PredictionPanel({ signal = null }) {
   const techScore = Number(signal.tech_score || 0);
   const mtf1h = signal.mtf_1h;
   const mtf4h = signal.mtf_4h;
+  const hasReg = !!signal.ml_reg_available;
+  const ciWidth = Number(signal.ml_conf_width_1h || 0);
 
   return (
     <div className="panel prediction-panel">
@@ -74,10 +113,50 @@ export default function PredictionPanel({ signal = null }) {
         <span className="conf-value">{Math.round(confidence * 100)}%</span>
       </div>
 
-      {/* ML 확률 */}
+      {/* ML 회귀 예측 (수익률 + 신뢰구간) */}
+      {hasReg && (
+        <div className="sub-section">
+          <div className="sub-title">
+            ML 회귀 예측
+            <span className="sub-tag">XGB/LGB</span>
+          </div>
+          <div className="reg-row">
+            <span className="reg-label">1h 예상 수익률</span>
+            <span className={Number(signal.ml_return_1h) >= 0 ? "ret-pos" : "ret-neg"}>
+              {retFmt(signal.ml_return_1h)}
+            </span>
+          </div>
+          <CIBar lower={signal.ml_lower_1h} median={signal.ml_return_1h} upper={signal.ml_upper_1h} />
+          <div className="reg-row">
+            <span className="reg-label">CI 폭 (10~90%)</span>
+            <span className={
+              ciWidth < 0.005 ? "ci-tight" : ciWidth > 0.02 ? "ci-wide" : "ci-medium"
+            }>
+              {pctFmt(ciWidth)}
+              <span className="ci-hint">
+                {ciWidth < 0.005 ? " 좁음" : ciWidth > 0.02 ? " 넓음" : " 보통"}
+              </span>
+            </span>
+          </div>
+          <div className="reg-row">
+            <span className="reg-label">3h 예상</span>
+            <span className={Number(signal.ml_return_3h) >= 0 ? "ret-pos" : "ret-neg"}>
+              {retFmt(signal.ml_return_3h)}
+            </span>
+          </div>
+          <div className="reg-row">
+            <span className="reg-label">6h 예상</span>
+            <span className={Number(signal.ml_return_6h) >= 0 ? "ret-pos" : "ret-neg"}>
+              {retFmt(signal.ml_return_6h)}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ML 분류 확률 */}
       {signal.ml_available && (
         <div className="sub-section">
-          <div className="sub-title">ML 예측</div>
+          <div className="sub-title">ML 방향 확률</div>
           <div className="prob-row">
             <span className="prob-label">상승</span>
             {probBar(mlUp, "#10b981")}
@@ -88,7 +167,7 @@ export default function PredictionPanel({ signal = null }) {
           </div>
         </div>
       )}
-      {!signal.ml_available && (
+      {!signal.ml_available && !hasReg && (
         <div className="sub-section">
           <div className="sub-title ml-warn">ML 모델 미학습 (기술지표만 사용)</div>
         </div>

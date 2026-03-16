@@ -33,14 +33,22 @@ _ML_ARTIFACT: Optional[dict] = None
 _ML_ARTIFACT_LOADED = False
 
 
+def _get_ml_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "../../../../ml")
+
+
+def _ensure_ml_path():
+    p = _get_ml_path()
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+
 def _get_ml_artifact() -> Optional[dict]:
     global _ML_ARTIFACT, _ML_ARTIFACT_LOADED
     if _ML_ARTIFACT_LOADED:
         return _ML_ARTIFACT
     try:
-        ml_path = os.path.join(os.path.dirname(__file__), "../../../../ml")
-        if ml_path not in sys.path:
-            sys.path.insert(0, ml_path)
+        _ensure_ml_path()
         from ml_predictor_service import load_active_ml_model
         _ML_ARTIFACT = load_active_ml_model()
     except Exception:
@@ -57,18 +65,66 @@ def reload_ml_artifact():
 
 
 def _predict_ml(features_row: dict) -> dict:
-    """ML 예측 실행. 모델 없으면 neutral 반환."""
+    """ML 분류 예측 실행. 모델 없으면 neutral 반환."""
     artifact = _get_ml_artifact()
     if artifact is None:
         return {"direction": 0, "prob_up": 0.333, "prob_down": 0.333, "available": False}
     try:
-        ml_path = os.path.join(os.path.dirname(__file__), "../../../../ml")
-        if ml_path not in sys.path:
-            sys.path.insert(0, ml_path)
+        _ensure_ml_path()
         from ml_predictor_service import predict
         return predict(features_row, artifact=artifact)
     except Exception:
         return {"direction": 0, "prob_up": 0.333, "prob_down": 0.333, "available": False}
+
+
+# ── ML Regressor (lazy load) ──────────────────────────────────────────────────
+_ML_REGRESSOR_SERVICE = None
+_ML_REGRESSOR_LOADED = False
+
+
+def _get_regressor_service():
+    global _ML_REGRESSOR_SERVICE, _ML_REGRESSOR_LOADED
+    if _ML_REGRESSOR_LOADED:
+        return _ML_REGRESSOR_SERVICE
+    try:
+        _ensure_ml_path()
+        from ml_regressor_service import get_regressor_service
+        _ML_REGRESSOR_SERVICE = get_regressor_service()
+    except Exception:
+        _ML_REGRESSOR_SERVICE = None
+    _ML_REGRESSOR_LOADED = True
+    return _ML_REGRESSOR_SERVICE
+
+
+def _predict_ml_regression(features_row: dict) -> dict:
+    """ML 회귀 예측. 1h/3h/6h 수익률 + 신뢰구간 반환."""
+    _null = {
+        "ml_reg_available": False,
+        "ml_return_1h": 0.0, "ml_lower_1h": 0.0, "ml_upper_1h": 0.0,
+        "ml_conf_width_1h": 0.0,
+        "ml_return_3h": 0.0, "ml_return_6h": 0.0,
+    }
+    svc = _get_regressor_service()
+    if svc is None:
+        return _null
+    try:
+        results = svc.predict(features_row)
+        r1h = results.get("1h", {})
+        r3h = results.get("3h", {})
+        r6h = results.get("6h", {})
+        if not r1h.get("available"):
+            return _null
+        return {
+            "ml_reg_available": True,
+            "ml_return_1h": r1h["predicted_return"],
+            "ml_lower_1h": r1h["lower_10"],
+            "ml_upper_1h": r1h["upper_90"],
+            "ml_conf_width_1h": r1h["confidence_width"],
+            "ml_return_3h": r3h.get("predicted_return", 0.0),
+            "ml_return_6h": r6h.get("predicted_return", 0.0),
+        }
+    except Exception:
+        return _null
 
 
 # ── DB Helpers ────────────────────────────────────────────────────────────────
@@ -268,23 +324,38 @@ def compute_signal(
     # ── 2. 기술지표 합성 스코어 ──────────────────────────────────────────
     tech_score = _compute_tech_score(features_row)
 
-    # ── 3. ML 예측 ──────────────────────────────────────────────────────
+    # ── 3. ML 분류 예측 ──────────────────────────────────────────────────
     ml_result = _predict_ml(features_row)
     ml_direction = ml_result["direction"]
     ml_prob_up = ml_result["prob_up"]
     ml_prob_down = ml_result["prob_down"]
     ml_available = ml_result["available"]
 
-    # ── 4. ML 스코어 변환 ────────────────────────────────────────────────
-    ml_score = ml_prob_up - ml_prob_down  # [-1, +1]
+    # ── 4. ML 회귀 예측 (수익률 + 신뢰구간) ─────────────────────────────
+    ml_reg = _predict_ml_regression(features_row)
+    ml_reg_available = ml_reg["ml_reg_available"]
+    ml_return_1h = ml_reg["ml_return_1h"]
 
-    # ── 5. MTF 스코어 ────────────────────────────────────────────────────
+    # ── 5. ML 스코어 변환 ────────────────────────────────────────────────
+    # 회귀 모델 있으면 회귀 수익률 기반 스코어 사용 (더 직접적)
+    # CI 폭이 좁을수록 신뢰도 높으므로 가중치 추가
+    if ml_reg_available:
+        # 1% 기준으로 정규화, CI 폭으로 dampening
+        ci_confidence = max(0.5, 1.0 - ml_reg["ml_conf_width_1h"] * 10)
+        ml_reg_score = max(-1.0, min(1.0, ml_return_1h / 0.01)) * ci_confidence
+        # 분류 모델 스코어도 보조로 사용
+        ml_cls_score = ml_prob_up - ml_prob_down
+        ml_score = 0.7 * ml_reg_score + 0.3 * ml_cls_score
+    else:
+        ml_score = ml_prob_up - ml_prob_down  # 분류만 사용
+
+    # ── 6. MTF 스코어 ────────────────────────────────────────────────────
     mtf_1h_score = mtf_1h * 0.5   # -0.5, 0, +0.5
     mtf_4h_score = mtf_4h * 0.5
 
-    # ── 6. 최종 앙상블 스코어 ────────────────────────────────────────────
-    # 가중치: 기술지표 40%, ML 40%, MTF1h 15%, MTF4h 5%
-    W_TECH, W_ML, W_MTF1H, W_MTF4H = 0.40, 0.40, 0.15, 0.05
+    # ── 7. 최종 앙상블 스코어 ────────────────────────────────────────────
+    # 가중치: 기술지표 35%, ML 45%, MTF1h 13%, MTF4h 7%
+    W_TECH, W_ML, W_MTF1H, W_MTF4H = 0.35, 0.45, 0.13, 0.07
     score = (
         W_TECH * tech_score
         + W_ML * ml_score
@@ -292,14 +363,14 @@ def compute_signal(
         + W_MTF4H * mtf_4h_score
     )
 
-    # ── 7. 변동성 레짐에 따른 임계값 조정 ───────────────────────────────
+    # ── 8. 변동성 레짐에 따른 임계값 조정 ───────────────────────────────
     threshold = 0.08
     ml_min = min_ml_prob
     if vol_regime == "high":
         threshold = 0.12
         ml_min = max(min_ml_prob, 0.52)
 
-    # ── 8. 신호 결정 + 필터 ─────────────────────────────────────────────
+    # ── 9. 신호 결정 + 필터 ─────────────────────────────────────────────
     signal = "no-trade"
 
     long_ok = (
@@ -318,7 +389,7 @@ def compute_signal(
     elif short_ok:
         signal = "short"
 
-    # ── 9. ATR 기반 TP/SL ────────────────────────────────────────────────
+    # ── 10. ATR 기반 TP/SL ───────────────────────────────────────────────
     rr_ratio = atr_tp_multiple / max(atr_sl_multiple, 0.01)
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
@@ -331,7 +402,7 @@ def compute_signal(
             tp_price = round(current_close - atr_tp_multiple * atr_14, 4)
             sl_price = round(current_close + atr_sl_multiple * atr_14, 4)
 
-    # ── 10. Half-Kelly 포지션 사이징 ─────────────────────────────────────
+    # ── 11. Half-Kelly 포지션 사이징 ─────────────────────────────────────
     if signal == "long":
         prob_win = ml_prob_up if ml_available else 0.5
     elif signal == "short":
@@ -343,7 +414,7 @@ def compute_signal(
     kelly = max(0.0, (prob_win * rr_ratio - prob_loss) / rr_ratio)
     position_size_pct = round(min(kelly * 0.5, max_kelly_fraction) * 100, 2)
 
-    # ── 11. Confidence ───────────────────────────────────────────────────
+    # ── 12. Confidence ───────────────────────────────────────────────────
     confidence = round(min(abs(score) * 2.0, 1.0), 4)
 
     result: dict[str, Any] = {
@@ -356,6 +427,14 @@ def compute_signal(
         "ml_prob_up": round(ml_prob_up, 4),
         "ml_prob_down": round(ml_prob_down, 4),
         "ml_available": ml_available,
+        # ML Regression (수익률 예측 + 신뢰구간)
+        "ml_reg_available": ml_reg["ml_reg_available"],
+        "ml_return_1h": round(ml_reg["ml_return_1h"], 6),
+        "ml_lower_1h": round(ml_reg["ml_lower_1h"], 6),
+        "ml_upper_1h": round(ml_reg["ml_upper_1h"], 6),
+        "ml_conf_width_1h": round(ml_reg["ml_conf_width_1h"], 6),
+        "ml_return_3h": round(ml_reg["ml_return_3h"], 6),
+        "ml_return_6h": round(ml_reg["ml_return_6h"], 6),
         # MTF
         "mtf_1h": mtf_1h,
         "mtf_4h": mtf_4h,

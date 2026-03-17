@@ -9,7 +9,17 @@ from app.core.db import db_conn_cursor
 logger = logging.getLogger(__name__)
 
 _MIGRATIONS = [
+    # 스키마 및 테이블 생성 (신규 환경 대응)
+    "CREATE SCHEMA IF NOT EXISTS pipeline",
+    """CREATE TABLE IF NOT EXISTS pipeline.water_marks (
+        pipeline_name TEXT PRIMARY KEY,
+        last_ts TIMESTAMPTZ NOT NULL,
+        rows_processed INTEGER NOT NULL DEFAULT 0,
+        run_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""",
     # features.eth_features 새 컬럼들
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS returns_1h NUMERIC",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS open NUMERIC",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS high NUMERIC",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS low NUMERIC",

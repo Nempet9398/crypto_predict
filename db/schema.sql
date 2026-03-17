@@ -1,5 +1,6 @@
 CREATE SCHEMA IF NOT EXISTS raw;
 CREATE SCHEMA IF NOT EXISTS features;
+CREATE SCHEMA IF NOT EXISTS pipeline;
 
 -- Raw 15m OHLCV from Binance
 CREATE TABLE IF NOT EXISTS raw.eth_ohlcv (
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS features.eth_features (
   high            NUMERIC,
   low             NUMERIC,
   volume          NUMERIC,
-  -- Returns
+  -- Returns (returns_1h = per-bar pct change, alias used by feature pipeline)
+  returns_1h      NUMERIC,
   returns_1bar    NUMERIC,
   returns_4bar    NUMERIC,
   returns_16bar   NUMERIC,
@@ -119,3 +121,12 @@ CREATE TABLE IF NOT EXISTS features.ml_predictions (
 
 CREATE INDEX IF NOT EXISTS idx_ml_predictions_ts ON features.ml_predictions (exchange, symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_ml_predictions_actual ON features.ml_predictions (exchange, symbol, actual_direction) WHERE actual_direction IS NULL;
+
+-- Pipeline high-water marks (feature pipeline 증분 처리용)
+CREATE TABLE IF NOT EXISTS pipeline.water_marks (
+  pipeline_name   TEXT        PRIMARY KEY,
+  last_ts         TIMESTAMPTZ NOT NULL,
+  rows_processed  INTEGER     NOT NULL DEFAULT 0,
+  run_count       INTEGER     NOT NULL DEFAULT 0,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

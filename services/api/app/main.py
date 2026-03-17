@@ -8,6 +8,7 @@ from app.core.migrations import run_migrations
 from app.routers import data, health, prices
 from app.routers import features as features_router
 from app.routers import signals
+from app.routers import ensemble_config as ensemble_config_router
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def create_app():
     app.include_router(data.router)
     app.include_router(features_router.router)
     app.include_router(signals.router)
+    app.include_router(ensemble_config_router.router)
 
     @app.get("/", include_in_schema=False)
     def root():

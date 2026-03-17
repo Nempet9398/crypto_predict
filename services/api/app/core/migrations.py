@@ -93,6 +93,24 @@ _MIGRATIONS = [
     # 인덱스
     "CREATE INDEX IF NOT EXISTS idx_signals_ts ON features.signals (exchange, symbol, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ml_preds_ts ON features.ml_predictions (exchange, symbol, ts DESC)",
+    # features.ensemble_config: UI-configurable ensemble weights
+    """
+    CREATE TABLE IF NOT EXISTS features.ensemble_config (
+        key         TEXT        PRIMARY KEY,
+        value       NUMERIC     NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    # Seed default ensemble config values (idempotent)
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_tech', 0.35) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_ml_regressor', 0.30) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_ml_classifier', 0.15) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_mtf_1h', 0.13) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_mtf_4h', 0.07) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_normal', 0.08) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_high_vol', 0.12) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_normal', 0.45) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_high_vol', 0.52) ON CONFLICT (key) DO NOTHING",
 ]
 
 

@@ -30,16 +30,12 @@ def feature_task():
     run_script("pipelines/features/technical_indicators.py", extra_args=["--incremental"])
 
 
-def train_arima_task():
-    run_script("ml/train_arima.py")
-
-
 def train_ml_task():
-    """Train XGBoost/LightGBM classifier. Skipped gracefully if packages not installed."""
+    """Train XGBoost/LightGBM classifier with Optuna AutoML. Skipped gracefully if packages not installed."""
     try:
-        run_script("ml/train_ml_classifier.py")
+        run_script("ml/train_ml_predictor.py")
     except subprocess.CalledProcessError:
-        pass  # Non-fatal: ensemble falls back to ARIMA-only if ML unavailable
+        pass  # Non-fatal: ensemble falls back to regressor-only if classifier unavailable
 
 
 def train_ml_regressor_task():
@@ -65,7 +61,7 @@ def make_dag():
     with DAG(
         dag_id="feature_pipeline_dag",
         default_args=default_args,
-        description="Process OHLCV, generate extended features, train ML + ARIMA, compute ensemble signals",
+        description="Process OHLCV, generate extended features, train ML (Optuna AutoML), compute ensemble signals",
         schedule_interval="@hourly",
         start_date=datetime(2023, 1, 1),
         catchup=False,
@@ -76,11 +72,10 @@ def make_dag():
         features = PythonOperator(task_id="generate_features", python_callable=feature_task)
         train_ml = PythonOperator(task_id="train_ml_classifier", python_callable=train_ml_task)
         train_ml_reg = PythonOperator(task_id="train_ml_regressor", python_callable=train_ml_regressor_task)
-        train_arima = PythonOperator(task_id="train_arima_model", python_callable=train_arima_task)
         ensemble = PythonOperator(task_id="compute_ensemble_signals", python_callable=ensemble_signal_task)
 
-        # Chain: ingest → resample → features(incremental) → [train_ml, train_ml_regressor, train_arima] → ensemble
-        ingest >> resample >> features >> [train_ml, train_ml_reg, train_arima] >> ensemble
+        # Chain: ingest → resample → features(incremental) → [train_ml_classifier, train_ml_regressor] → ensemble
+        ingest >> resample >> features >> [train_ml, train_ml_reg] >> ensemble
 
     return dag
 

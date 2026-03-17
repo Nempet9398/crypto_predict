@@ -24,6 +24,8 @@ os.makedirs(MODEL_REGISTRY_DIR, exist_ok=True)
 PREDICTOR_MODEL_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor.pkl")
 PREDICTOR_META_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor_meta.json")
 
+from ml_predictor_service import PipelinePredictor  # noqa: E402
+
 FEATURE_COLS = [
     "returns_1bar", "returns_4bar", "returns_16bar",
     "rsi_14", "macd_line", "macd_signal", "macd_hist",
@@ -81,7 +83,12 @@ def compute_extra_features(df: pd.DataFrame) -> pd.DataFrame:
     df["returns_16bar"] = close.pct_change(16).fillna(0.0)
 
     if "volume" in df.columns and "volume_sma_20" in df.columns:
-        df["volume_ratio"] = (df["volume"].astype(float) / (df["volume_sma_20"].astype(float) + 1e-9)).clip(0, 10)
+        vol = df["volume"].astype(float)
+        vsma = df["volume_sma_20"].astype(float)
+        if vol.notna().any() and vsma.notna().any():
+            df["volume_ratio"] = (vol / (vsma + 1e-9)).clip(0, 10)
+        else:
+            df["volume_ratio"] = 1.0
     else:
         df["volume_ratio"] = 1.0
 
@@ -187,30 +194,16 @@ def train(lookback_days: int = 60, horizon_bars: int = 4,
             best_model = model_instance
 
     # 전체 데이터로 최종 학습
+    xgb_label_map = None
     if best_name == "xgboost":
-        label_map = {v: i for i, v in enumerate(sorted(set(y)))}
-        y_mapped = np.array([label_map[v] for v in y])
+        xgb_label_map = {v: i for i, v in enumerate(sorted(set(y)))}
+        y_mapped = np.array([xgb_label_map[v] for v in y])
         best_model.fit(X_scaled, y_mapped)
-        # classes_ 복원
-        inv_map = {v: k for k, v in label_map.items()}
-        best_model.classes_ = np.array([inv_map[i] for i in range(len(label_map))])
     else:
         best_model.fit(X_scaled, y)
 
     # scaler도 모델에 포함해서 저장
-    class PipelinePredictor:
-        def __init__(self, scaler, model):
-            self.scaler = scaler
-            self.model = model
-            self.classes_ = model.classes_
-
-        def predict(self, X):
-            return self.model.predict(self.scaler.transform(X))
-
-        def predict_proba(self, X):
-            return self.model.predict_proba(self.scaler.transform(X))
-
-    pipeline = PipelinePredictor(scaler, best_model)
+    pipeline = PipelinePredictor(scaler, best_model, label_map=xgb_label_map)
 
     # 저장
     with open(PREDICTOR_MODEL_PATH, "wb") as f:

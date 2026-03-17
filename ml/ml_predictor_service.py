@@ -14,6 +14,29 @@ PREDICTOR_MODEL_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor.pkl")
 PREDICTOR_META_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor_meta.json")
 
 
+class PipelinePredictor:
+    """Scaler + classifier pipeline. Defined here for pickling stability."""
+    def __init__(self, scaler, model, label_map=None):
+        self.scaler = scaler
+        self.model = model
+        self._label_map = label_map
+        if label_map is not None:
+            inv = {v: k for k, v in label_map.items()}
+            self.classes_ = np.array([inv[i] for i in range(len(label_map))])
+        else:
+            self.classes_ = model.classes_
+
+    def predict(self, X):
+        raw = self.model.predict(self.scaler.transform(X))
+        if self._label_map is not None:
+            inv = {v: k for k, v in self._label_map.items()}
+            return np.array([inv.get(int(p), 0) for p in raw])
+        return raw
+
+    def predict_proba(self, X):
+        return self.model.predict_proba(self.scaler.transform(X))
+
+
 def load_active_ml_model() -> Optional[dict]:
     """모델 파일 로드. 없으면 None 반환."""
     if not os.path.exists(PREDICTOR_MODEL_PATH):

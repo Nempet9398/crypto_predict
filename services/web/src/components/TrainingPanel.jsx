@@ -118,13 +118,13 @@ export default function TrainingPanel({ open, onClose }) {
     setRunning(true);
 
     const qs = new URLSearchParams({
-      lookback_days:   params.lookback_days,
-      horizon_bars:    params.horizon_bars,
-      n_trials:        params.n_trials,
-      outer_cv_splits: params.outer_cv_splits,
-      timeout_sec:     params.timeout_sec,
+      lookback_days:   Math.max(7, Math.min(730, params.lookback_days)),
+      horizon_bars:    Math.max(1, Math.min(32, params.horizon_bars)),
+      n_trials:        Math.max(5, Math.min(200, params.n_trials)),
+      outer_cv_splits: Math.max(3, Math.min(10, params.outer_cv_splits)),
+      timeout_sec:     Math.max(60, Math.min(7200, params.timeout_sec)),
       train_regressor: params.train_regressor,
-      quality_gate:    params.quality_gate,
+      quality_gate:    Math.max(0.45, Math.min(0.70, params.quality_gate)),
     }).toString();
 
     try {
@@ -301,6 +301,9 @@ export default function TrainingPanel({ open, onClose }) {
               <summary>에러 로그</summary>
               <pre>{result.stderr}</pre>
             </details>
+          )}
+          {result && result.error && !running && (
+            <div className="tp-error">오류: {result.error}</div>
           )}
         </div>
 

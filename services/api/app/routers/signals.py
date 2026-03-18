@@ -195,13 +195,12 @@ def _run_training(
         "last_result": None,
     })
 
-    ml_dir = os.path.join(os.path.dirname(__file__), "../../../../ml")
+    ml_dir = os.path.join(os.path.dirname(__file__), "../../ml")
 
     def _run_script(script: str, extra_args: list[str]) -> tuple[bool, str, str]:
         cmd = [
             sys.executable, script,
             f"--lookback-days={lookback_days}",
-            f"--horizon-bars={horizon_bars}",
             f"--n-trials={n_trials}",
             f"--outer-cv-splits={outer_cv_splits}",
         ] + extra_args
@@ -236,7 +235,7 @@ def _run_training(
         # 분류 모델
         _training_status["stage"] = "분류 모델 학습 중"
         _training_status["progress"] = 5
-        ok1, out1, err1 = _run_script("train_ml_predictor.py", [])
+        ok1, out1, err1 = _run_script("train_ml_predictor.py", [f"--horizon-bars={horizon_bars}"])
 
         # 회귀 모델 (옵션)
         ok2, out2, err2 = True, "", ""

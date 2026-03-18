@@ -111,6 +111,23 @@ _MIGRATIONS = [
     "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_high_vol', 0.12) ON CONFLICT (key) DO NOTHING",
     "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_normal', 0.45) ON CONFLICT (key) DO NOTHING",
     "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_high_vol', 0.52) ON CONFLICT (key) DO NOTHING",
+    # ML model registry
+    """
+    CREATE TABLE IF NOT EXISTS features.ml_model_registry (
+        model_id        TEXT PRIMARY KEY,
+        model_type      TEXT NOT NULL,
+        trained_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        feature_cols    JSONB NOT NULL,
+        hyperparams     JSONB,
+        metrics         JSONB,
+        is_active       BOOLEAN NOT NULL DEFAULT FALSE,
+        artifact_path   TEXT NOT NULL
+    )
+    """,
+    # target_return 컬럼 (회귀 모델용)
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_1h NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_3h NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_6h NUMERIC",
     # Migration 004: 피처 정교화 v2 (원칙 1,2,3)
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS adx NUMERIC",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_prev NUMERIC",

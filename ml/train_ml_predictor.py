@@ -102,18 +102,27 @@ def get_db_conn():
 
 def load_features(lookback_days: int = 60, exchange: str = "binance", symbol: str = "ETH/USDT") -> pd.DataFrame:
     conn = get_db_conn()
-    df = pd.read_sql(f"""
-        SELECT *
-        FROM features.eth_features
-        WHERE exchange = %s
-          AND symbol = %s
-          AND ts >= NOW() - INTERVAL '{lookback_days} days'
-          AND rsi_14 IS NOT NULL
-          AND atr_14 IS NOT NULL
-        ORDER BY ts
-    """, conn, params=(exchange, symbol))
-    conn.close()
-    return df
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT *
+                FROM features.eth_features
+                WHERE exchange = %s
+                  AND symbol = %s
+                  AND ts >= NOW() - INTERVAL '{lookback_days} days'
+                  AND rsi_14 IS NOT NULL
+                  AND atr_14 IS NOT NULL
+                ORDER BY ts
+            """, (exchange, symbol))
+            cols = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+        df = pd.DataFrame(rows, columns=cols)
+        # psycopg2가 NUMERIC을 decimal.Decimal로 반환 → float 변환
+        for col in df.select_dtypes(include='object').columns:
+            df[col] = pd.to_numeric(df[col], errors='ignore')
+        return df
+    finally:
+        conn.close()
 
 
 def build_target(df: pd.DataFrame, horizon_bars: int = 4, threshold: float = 0.003) -> pd.Series:
@@ -347,6 +356,22 @@ def _build_model(algo: str, best_params: dict):
         )
 
 
+class PipelinePredictor:
+    """Scaler + model wrapper for single-call predict. Must be at module level for pickle."""
+    def __init__(self, scaler, model, feature_cols, label_map=None):
+        self.scaler = scaler
+        self.model = model
+        self.classes_ = model.classes_
+        self.feature_cols = feature_cols
+        self._label_map = label_map  # only for xgboost
+
+    def predict(self, X):
+        return self.model.predict(self.scaler.transform(X))
+
+    def predict_proba(self, X):
+        return self.model.predict_proba(self.scaler.transform(X))
+
+
 def train(
     lookback_days: int = 60,
     horizon_bars: int = 4,
@@ -377,8 +402,15 @@ def train(
     df = compute_extra_features(df)
     df["target"] = build_target(df, horizon_bars=horizon_bars)
 
-    # Only keep candidate features that exist in df
-    available_candidates = [c for c in CANDIDATE_FEATURE_COLS if c in df.columns]
+    # Only keep candidate features that exist in df AND have sufficient data (>50% non-null)
+    available_candidates = [
+        c for c in CANDIDATE_FEATURE_COLS
+        if c in df.columns and df[c].notna().mean() > 0.5
+    ]
+    if not available_candidates:
+        print("[train_ml_predictor] No usable feature columns found")
+        return False
+    print(f"[train_ml_predictor] Using {len(available_candidates)} features: {available_candidates}")
     df = df.dropna(subset=available_candidates + ["target"])
     df = df[df["target"].notna()]
 
@@ -479,21 +511,6 @@ def train(
         best_model.classes_ = np.array([inv_map[i] for i in range(len(label_map))])
     else:
         best_model.fit(X_scaled, y)
-
-    class PipelinePredictor:
-        """Scaler + model wrapper for single-call predict."""
-        def __init__(self, scaler, model, feature_cols, label_map=None):
-            self.scaler = scaler
-            self.model = model
-            self.classes_ = model.classes_
-            self.feature_cols = feature_cols
-            self._label_map = label_map  # only for xgboost
-
-        def predict(self, X):
-            return self.model.predict(self.scaler.transform(X))
-
-        def predict_proba(self, X):
-            return self.model.predict_proba(self.scaler.transform(X))
 
     pipeline = PipelinePredictor(scaler, best_model, selected_features)
 

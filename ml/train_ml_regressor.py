@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -147,32 +148,25 @@ def get_db_conn() -> psycopg2.extensions.connection:
     )
 
 
-def load_features(conn: psycopg2.extensions.connection, exchange: str, symbol: str) -> pd.DataFrame:
+def load_features(conn: psycopg2.extensions.connection, exchange: str, symbol: str, lookback_days: int = 0) -> pd.DataFrame:
     """Load features from DB and engineer lag + time features."""
-    query = """
-        SELECT
-            ts, close, returns_1bar,
-            rsi_14, macd_line, macd_signal, macd_hist,
-            bb_pct, bb_width, atr_pct,
-            stoch_k, stoch_d, volatility_10,
-            obv, vwap, volume_ratio,
-            ema_20, ema_50,
-            signal_1h, signal_4h,
-            -- 원칙 2: 방향성 피처
-            rsi_prev, macd_hist_prev, atr_pct_prev, bb_pct_prev,
-            -- 원칙 1: 이벤트 피처
-            macd_golden_cross, macd_dead_cross,
-            stoch_golden_cross, stoch_dead_cross,
-            rsi_cross_30_up, rsi_cross_70_down,
-            volume_above_avg, ma_regular_arrangement,
-            -- 원칙 3: ADX
-            adx
+    time_filter = f"AND ts >= NOW() - INTERVAL '{lookback_days} days'" if lookback_days > 0 else ""
+    query = f"""
+        SELECT *
         FROM features.eth_features
         WHERE exchange = %s AND symbol = %s
           AND rsi_14 IS NOT NULL
+          {time_filter}
         ORDER BY ts
     """
-    df = pd.read_sql(query, conn, params=(exchange, symbol))
+    with conn.cursor() as cur:
+        cur.execute(query, (exchange, symbol))
+        cols = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+    df = pd.DataFrame(rows, columns=cols)
+    # psycopg2가 NUMERIC을 decimal.Decimal로 반환 → float 변환
+    for col in df.select_dtypes(include='object').columns:
+        df[col] = pd.to_numeric(df[col], errors='ignore')
     if df.empty:
         return df
 
@@ -484,18 +478,20 @@ def register_model(
     metrics: dict,
     feature_cols: list[str],
     best_params: dict,
-) -> int:
+) -> str:
     """Insert model record into ml_model_registry. Returns model_id."""
     sql = """
         INSERT INTO features.ml_model_registry
-            (model_type, trained_at, feature_cols, hyperparams, metrics, is_active, artifact_path)
-        VALUES (%s, %s, %s, %s, %s, FALSE, %s)
+            (model_id, model_type, trained_at, feature_cols, hyperparams, metrics, is_active, artifact_path)
+        VALUES (%s, %s, %s, %s, %s, %s, FALSE, %s)
         RETURNING model_id
     """
+    model_id = str(uuid.uuid4())
     model_type = f"{algo}_regressor_{horizon}"
     hyperparams = {**best_params, "quantiles": QUANTILES, "tuning": "optuna"}
     with conn.cursor() as cur:
         cur.execute(sql, (
+            model_id,
             model_type,
             datetime.now(tz=UTC).isoformat(),
             json.dumps(feature_cols),
@@ -527,8 +523,12 @@ def train_horizon(
     logger.info("=" * 60)
     logger.info("Training horizon=%s ...", horizon)
 
-    # df에 실제 존재하는 후보 피처만 사용 (신규 피처 미생성 시 graceful fallback)
-    available_candidates = [c for c in CANDIDATE_FEATURE_COLS if c in df.columns]
+    # df에 실제 존재하고 데이터가 충분한 피처만 사용 (NULL이 많은 피처 제외)
+    available_candidates = [
+        c for c in CANDIDATE_FEATURE_COLS
+        if c in df.columns and df[c].notna().mean() > 0.5
+    ]
+    logger.info("[%s] Using %d features (>50%% non-null): %s", horizon, len(available_candidates), available_candidates)
     X_all, y = build_xy(df, horizon, available_candidates)
     if len(X_all) < MIN_TRAIN_ROWS:
         logger.warning("Skipping horizon=%s: only %d rows (need %d)", horizon, len(X_all), MIN_TRAIN_ROWS)
@@ -660,17 +660,17 @@ def promote_best_models(conn: psycopg2.extensions.connection) -> None:
                 (model_id,)
             )
         conn.commit()
-        logger.info("Promoted model_id=%d (%s) dir_acc=%.3f", model_id, model_type, dir_acc)
+        logger.info("Promoted model_id=%s (%s) dir_acc=%.3f", model_id, model_type, dir_acc)
 
 
-def main() -> None:
+def main(lookback_days: int = 0) -> None:
     exchange = get_env("EXCHANGE", "binance")
     symbol = get_env("SYMBOL", "ETH/USDT")
 
     conn = get_db_conn()
     try:
-        logger.info("Loading features for %s %s ...", exchange, symbol)
-        df = load_features(conn, exchange, symbol)
+        logger.info("Loading features for %s %s (lookback=%d days) ...", exchange, symbol, lookback_days)
+        df = load_features(conn, exchange, symbol, lookback_days=lookback_days)
         if df.empty:
             logger.error("No feature data found. Run technical_indicators.py first.")
             return
@@ -709,4 +709,4 @@ if __name__ == "__main__":
     # 전역 상수를 CLI 값으로 override
     OPTUNA_N_TRIALS = _args.n_trials
     OUTER_CV_SPLITS = _args.outer_cv_splits
-    main()
+    main(lookback_days=_args.lookback_days)

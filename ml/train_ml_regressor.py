@@ -55,8 +55,12 @@ HORIZONS = {
 QUANTILES = [0.10, 0.50, 0.90]
 
 # Full candidate feature set (feature selection prunes this per horizon)
+# 3원칙 기반 피처 구성:
+#   원칙 1: 값보다 이벤트를 (크로스오버, 돌파 이벤트)
+#   원칙 2: 방향성을 피처로 (이전 봉 값 → 방향 감지)
+#   원칙 3: 시장 국면 맥락 (ADX, regime)
 CANDIDATE_FEATURE_COLS = [
-    # Technical indicators
+    # ── 기본 기술지표 ──────────────────────────────────────────
     "rsi_14",
     "macd_line",
     "macd_signal",
@@ -72,21 +76,37 @@ CANDIDATE_FEATURE_COLS = [
     "volume_ratio",
     "ema_20",
     "ema_50",
-    # MTF signals
+    # ── MTF 신호 ──────────────────────────────────────────────
     "signal_1h",
     "signal_4h",
-    # Lag returns (no lookahead bias)
+    # ── Lag returns (lookahead 없음) ──────────────────────────
     "returns_lag_1",
     "returns_lag_2",
     "returns_lag_3",
     "returns_lag_4",
     "returns_lag_6",
     "returns_lag_8",
-    # Time features (cyclic encoding)
+    # ── 시간 인코딩 ───────────────────────────────────────────
     "hour_sin",
     "hour_cos",
     "dow_sin",
     "dow_cos",
+    # ── 원칙 2: 방향성 피처 (이전 봉) ────────────────────────
+    "rsi_prev",
+    "macd_hist_prev",
+    "atr_pct_prev",
+    "bb_pct_prev",
+    # ── 원칙 1: 이벤트 피처 (돌파 순간) ─────────────────────
+    "macd_golden_cross",
+    "macd_dead_cross",
+    "stoch_golden_cross",
+    "stoch_dead_cross",
+    "rsi_cross_30_up",
+    "rsi_cross_70_down",
+    "volume_above_avg",
+    "ma_regular_arrangement",
+    # ── 원칙 3: 추세 강도 (MarketRegime) ─────────────────────
+    "adx",
 ]
 
 # Feature selection config
@@ -128,7 +148,16 @@ def load_features(conn: psycopg2.extensions.connection, exchange: str, symbol: s
             stoch_k, stoch_d, volatility_10,
             obv, vwap, volume_ratio,
             ema_20, ema_50,
-            signal_1h, signal_4h
+            signal_1h, signal_4h,
+            -- 원칙 2: 방향성 피처
+            rsi_prev, macd_hist_prev, atr_pct_prev, bb_pct_prev,
+            -- 원칙 1: 이벤트 피처
+            macd_golden_cross, macd_dead_cross,
+            stoch_golden_cross, stoch_dead_cross,
+            rsi_cross_30_up, rsi_cross_70_down,
+            volume_above_avg, ma_regular_arrangement,
+            -- 원칙 3: ADX
+            adx
         FROM features.eth_features
         WHERE exchange = %s AND symbol = %s
           AND rsi_14 IS NOT NULL
@@ -489,8 +518,9 @@ def train_horizon(
     logger.info("=" * 60)
     logger.info("Training horizon=%s ...", horizon)
 
-    # Build with all candidate features first (for selection)
-    X_all, y = build_xy(df, horizon, CANDIDATE_FEATURE_COLS)
+    # df에 실제 존재하는 후보 피처만 사용 (신규 피처 미생성 시 graceful fallback)
+    available_candidates = [c for c in CANDIDATE_FEATURE_COLS if c in df.columns]
+    X_all, y = build_xy(df, horizon, available_candidates)
     if len(X_all) < MIN_TRAIN_ROWS:
         logger.warning("Skipping horizon=%s: only %d rows (need %d)", horizon, len(X_all), MIN_TRAIN_ROWS)
         return None
@@ -498,8 +528,7 @@ def train_horizon(
     # Step 1: Feature selection
     logger.info("[%s] Step 1/4: Feature selection from %d candidates ...", horizon, len(X_all.columns))
     selected_features = select_features_by_importance(X_all, y)
-    X, _ = build_xy(df, horizon, selected_features)
-    X, y = build_xy(df, horizon, selected_features)  # re-build after selection
+    X, y = build_xy(df, horizon, selected_features)
 
     logger.info("[%s] Using %d features: %s", horizon, len(selected_features), selected_features)
 

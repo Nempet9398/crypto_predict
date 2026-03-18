@@ -111,6 +111,22 @@ _MIGRATIONS = [
     "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_high_vol', 0.12) ON CONFLICT (key) DO NOTHING",
     "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_normal', 0.45) ON CONFLICT (key) DO NOTHING",
     "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_high_vol', 0.52) ON CONFLICT (key) DO NOTHING",
+    # Migration 004: 피처 정교화 v2 (원칙 1,2,3)
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS adx NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_hist_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS atr_pct_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS bb_pct_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_golden_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_dead_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS stoch_golden_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS stoch_dead_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_cross_30_up SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_cross_70_down SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS volume_above_avg SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS ma_regular_arrangement SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS market_regime_detail TEXT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS shock_detected SMALLINT",
 ]
 
 

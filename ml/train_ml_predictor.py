@@ -36,7 +36,12 @@ PREDICTOR_MODEL_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor.pkl")
 PREDICTOR_META_PATH = os.path.join(MODEL_REGISTRY_DIR, "eth_predictor_meta.json")
 
 # Full candidate feature set (feature selection prunes this)
+# 3원칙 기반 피처 구성:
+#   원칙 1: 값보다 이벤트를 (크로스오버, 돌파 이벤트)
+#   원칙 2: 방향성을 피처로 (이전 봉 값 → 방향 감지)
+#   원칙 3: 시장 국면 맥락 (ADX, regime)
 CANDIDATE_FEATURE_COLS = [
+    # ── 기본 기술지표 ──────────────────────────────────────────
     "returns_1bar", "returns_4bar", "returns_16bar",
     "rsi_14", "macd_line", "macd_signal", "macd_hist",
     "bb_pct", "bb_width",
@@ -48,6 +53,22 @@ CANDIDATE_FEATURE_COLS = [
     "ema_20", "ema_50",
     "obv",
     "vwap",
+    # ── 원칙 2: 방향성 피처 (이전 봉) ────────────────────────
+    "rsi_prev",
+    "macd_hist_prev",
+    "atr_pct_prev",
+    "bb_pct_prev",
+    # ── 원칙 1: 이벤트 피처 (돌파 순간) ─────────────────────
+    "macd_golden_cross",
+    "macd_dead_cross",
+    "stoch_golden_cross",
+    "stoch_dead_cross",
+    "rsi_cross_30_up",
+    "rsi_cross_70_down",
+    "volume_above_avg",
+    "ma_regular_arrangement",
+    # ── 원칙 3: 추세 강도 ─────────────────────────────────────
+    "adx",
 ]
 
 # Feature selection config

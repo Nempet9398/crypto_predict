@@ -117,31 +117,147 @@ def get_ml_status():
 
 # ── ML 학습 트리거 ────────────────────────────────────────────────────────────
 
-_training_status = {"running": False, "last_result": None, "started_at": None}
+# 학습 단계 정의: (단계명, 시작 %, 끝 %)
+_TRAIN_STAGES = [
+    ("데이터 로드 중",           0,  10),
+    ("피처 선택 중",            10,  20),
+    ("Optuna 튜닝 중 (XGB)",    20,  45),
+    ("Optuna 튜닝 중 (LGB)",    45,  70),
+    ("최종 모델 CV 평가 중",     70,  85),
+    ("모델 저장 & 등록 중",      85,  95),
+    ("완료",                    95, 100),
+]
+
+_training_status = {
+    "running": False,
+    "last_result": None,
+    "started_at": None,
+    "progress": 0,          # 0~100
+    "stage": "",            # 현재 단계명
+    "params": {},           # 학습에 사용된 파라미터
+    "logs": [],             # 최근 로그 (최대 50줄)
+}
 
 
-def _run_training(lookback_days: int, horizon_bars: int):
+def _parse_progress(line: str) -> tuple[int | None, str | None]:
+    """stdout 한 줄에서 진행률과 단계명 추출."""
+    for stage_name, pct_start, pct_end in _TRAIN_STAGES:
+        if any(kw in line for kw in [
+            "Loading features", "피처 로드",
+            "Feature selection", "피처 선택", "Step 1",
+            "Optuna tuning", "Step 2", "XGB",
+            "LGB", "LightGBM",
+            "Outer CV", "Walk-Forward", "Step 3",
+            "Saving", "저장", "Step 4",
+            "Finished", "완료", "Done",
+        ]):
+            # 단계별 키워드 매핑
+            kw_map = [
+                (["Loading features", "피처 로드"],                   ("데이터 로드 중",          5)),
+                (["Step 1", "Feature selection", "피처 선택"],        ("피처 선택 중",            15)),
+                (["Optuna", "Step 2", "XGB", "trials"],               ("Optuna 튜닝 중 (XGB)",    35)),
+                (["LGB", "LightGBM"],                                 ("Optuna 튜닝 중 (LGB)",    60)),
+                (["Outer CV", "Walk-Forward", "Step 3", "fold"],      ("최종 모델 CV 평가 중",    78)),
+                (["Saving", "저장", "Registering", "Step 4"],         ("모델 저장 & 등록 중",     90)),
+                (["Finished", "완료", "Done", "Best model"],          ("완료",                   100)),
+            ]
+            for keywords, (name, pct) in kw_map:
+                if any(k in line for k in keywords):
+                    return pct, name
+    return None, None
+
+
+def _run_training(
+    lookback_days: int,
+    horizon_bars: int,
+    n_trials: int,
+    outer_cv_splits: int,
+    timeout_sec: int,
+    train_regressor: bool,
+    quality_gate: float,
+):
     global _training_status
-    _training_status["running"] = True
-    _training_status["started_at"] = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    _training_status.update({
+        "running": True,
+        "started_at": now.isoformat(),
+        "progress": 0,
+        "stage": "학습 준비 중",
+        "logs": [],
+        "params": {
+            "lookback_days": lookback_days,
+            "horizon_bars": horizon_bars,
+            "n_trials": n_trials,
+            "outer_cv_splits": outer_cv_splits,
+            "train_regressor": train_regressor,
+            "quality_gate": quality_gate,
+        },
+        "last_result": None,
+    })
+
+    ml_dir = os.path.join(os.path.dirname(__file__), "../../../../ml")
+
+    def _run_script(script: str, extra_args: list[str]) -> tuple[bool, str, str]:
+        cmd = [
+            sys.executable, script,
+            f"--lookback-days={lookback_days}",
+            f"--horizon-bars={horizon_bars}",
+            f"--n-trials={n_trials}",
+            f"--outer-cv-splits={outer_cv_splits}",
+        ] + extra_args
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=ml_dir,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1,
+            )
+            stdout_lines = []
+            # stdout를 실시간으로 읽어서 진행률 파싱
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                stdout_lines.append(line)
+                _training_status["logs"] = _training_status["logs"][-49:] + [line]
+                pct, stage = _parse_progress(line)
+                if pct is not None:
+                    _training_status["progress"] = pct
+                    _training_status["stage"] = stage
+
+            proc.wait(timeout=timeout_sec)
+            stderr_out = proc.stderr.read()
+            success = proc.returncode == 0
+            return success, "\n".join(stdout_lines[-2000:]), stderr_out[-1000:]
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False, "", f"타임아웃 ({timeout_sec}초 초과)"
+        except Exception as exc:
+            return False, "", str(exc)
+
     try:
-        ml_dir = os.path.join(os.path.dirname(__file__), "../../../../ml")
-        result = subprocess.run(
-            [sys.executable, "train_ml_predictor.py",
-             f"--lookback-days={lookback_days}",
-             f"--horizon-bars={horizon_bars}"],
-            capture_output=True, text=True, cwd=ml_dir, timeout=600,
-        )
-        success = result.returncode == 0
+        # 분류 모델
+        _training_status["stage"] = "분류 모델 학습 중"
+        _training_status["progress"] = 5
+        ok1, out1, err1 = _run_script("train_ml_predictor.py", [])
+
+        # 회귀 모델 (옵션)
+        ok2, out2, err2 = True, "", ""
+        if train_regressor:
+            _training_status["stage"] = "회귀 모델 학습 중"
+            _training_status["progress"] = 55
+            ok2, out2, err2 = _run_script("train_ml_regressor.py", [])
+
+        success = ok1 and ok2
+        _training_status["progress"] = 100 if success else _training_status["progress"]
+        _training_status["stage"] = "완료" if success else "오류 발생"
         _training_status["last_result"] = {
             "success": success,
-            "stdout": result.stdout[-2000:] if result.stdout else "",
-            "stderr": result.stderr[-1000:] if result.stderr else "",
+            "stdout": (out1 + "\n" + out2).strip()[-2000:],
+            "stderr": (err1 + "\n" + err2).strip()[-1000:],
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }
         if success:
-            reload_ml_artifact()  # 캐시 갱신
+            reload_ml_artifact()
     except Exception as e:
+        _training_status["stage"] = "오류 발생"
         _training_status["last_result"] = {
             "success": False,
             "error": str(e),
@@ -154,27 +270,52 @@ def _run_training(lookback_days: int, horizon_bars: int):
 @router.post("/ml/train")
 def train_ml_model(
     background_tasks: BackgroundTasks,
-    lookback_days: int = Query(60, ge=7, le=365),
-    horizon_bars: int = Query(4, ge=1, le=32, description="예측 대상: 4=1h, 16=4h, 32=8h"),
+    lookback_days: int = Query(60, ge=7, le=730, description="학습 데이터 기간 (일)"),
+    horizon_bars: int = Query(4, ge=1, le=32, description="예측 봉 수: 4=1h, 12=3h, 24=6h"),
+    n_trials: int = Query(40, ge=5, le=200, description="Optuna 튜닝 횟수 (많을수록 정확, 느림)"),
+    outer_cv_splits: int = Query(5, ge=3, le=10, description="Walk-Forward CV 폴드 수"),
+    timeout_sec: int = Query(600, ge=60, le=7200, description="최대 학습 시간(초)"),
+    train_regressor: bool = Query(True, description="회귀 모델(수익률 예측) 함께 학습"),
+    quality_gate: float = Query(0.50, ge=0.45, le=0.70, description="모델 승격 최소 방향성 정확도"),
 ):
-    """ML 예측 모델 백그라운드 학습 시작."""
+    """ML 예측 모델 백그라운드 학습 시작. /ml/train-status 로 진행률 확인."""
     if _training_status["running"]:
-        return {"status": "already_running", "started_at": _training_status["started_at"]}
-    background_tasks.add_task(_run_training, lookback_days, horizon_bars)
+        return {
+            "status": "already_running",
+            "started_at": _training_status["started_at"],
+            "progress": _training_status["progress"],
+            "stage": _training_status["stage"],
+        }
+    background_tasks.add_task(
+        _run_training,
+        lookback_days, horizon_bars, n_trials,
+        outer_cv_splits, timeout_sec, train_regressor, quality_gate,
+    )
     return {
         "status": "started",
-        "lookback_days": lookback_days,
-        "horizon_bars": horizon_bars,
-        "message": f"{lookback_days}일 데이터로 학습 시작. /ml/train-status 에서 진행 상태 확인 가능.",
+        "params": {
+            "lookback_days": lookback_days,
+            "horizon_bars": horizon_bars,
+            "n_trials": n_trials,
+            "outer_cv_splits": outer_cv_splits,
+            "timeout_sec": timeout_sec,
+            "train_regressor": train_regressor,
+            "quality_gate": quality_gate,
+        },
+        "message": f"{lookback_days}일 데이터 / Optuna {n_trials}회 튜닝으로 학습 시작. /ml/train-status 에서 진행률 확인.",
     }
 
 
 @router.get("/ml/train-status")
 def get_training_status():
-    """ML 학습 진행 상태 확인."""
+    """ML 학습 진행 상태 확인 (폴링용)."""
     return {
         "running": _training_status["running"],
         "started_at": _training_status["started_at"],
+        "progress": _training_status["progress"],       # 0~100
+        "stage": _training_status["stage"],              # 현재 단계명
+        "params": _training_status["params"],
+        "logs": _training_status["logs"][-20:],          # 최근 20줄
         "last_result": _training_status["last_result"],
     }
 

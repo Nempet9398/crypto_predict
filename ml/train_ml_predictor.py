@@ -352,6 +352,8 @@ def train(
     horizon_bars: int = 4,
     exchange: str = "binance",
     symbol: str = "ETH/USDT",
+    n_trials: int = OPTUNA_N_TRIALS,
+    outer_cv_splits: int = OUTER_CV_SPLITS,
 ):
     """
     Full AutoML training pipeline:
@@ -398,25 +400,25 @@ def train(
     X = X_all[:, selected_indices]
 
     # ── Step 2: Optuna tuning ──────────────────────────────────────────────
-    print(f"[train_ml_predictor] Step 2/4: Optuna tuning ({OPTUNA_N_TRIALS} trials each algo) ...")
+    print(f"[train_ml_predictor] Step 2/4: Optuna tuning ({n_trials} trials each algo) ...")
     best_params_xgb = _default_hyperparams("xgb")
     best_params_lgb = _default_hyperparams("lgb")
 
     try:
         import xgboost  # noqa
-        best_params_xgb = tune_hyperparams_optuna(X, y, algo="xgb")
+        best_params_xgb = tune_hyperparams_optuna(X, y, algo="xgb", n_trials=n_trials)
     except ImportError:
         print("[train_ml_predictor] xgboost not available")
 
     try:
         import lightgbm  # noqa
-        best_params_lgb = tune_hyperparams_optuna(X, y, algo="lgb")
+        best_params_lgb = tune_hyperparams_optuna(X, y, algo="lgb", n_trials=n_trials)
     except ImportError:
         print("[train_ml_predictor] lightgbm not available")
 
     # ── Step 3: Outer CV with tuned params ────────────────────────────────
     print("[train_ml_predictor] Step 3/4: Outer CV evaluation ...")
-    tscv = TimeSeriesSplit(n_splits=OUTER_CV_SPLITS)
+    tscv = TimeSeriesSplit(n_splits=outer_cv_splits)
     class_weight_map = {c: len(y) / (len(classes) * cnt) for c, cnt in zip(classes, counts)}
 
     results = []
@@ -533,12 +535,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--horizon-bars", type=int, default=4)
+    parser.add_argument("--n-trials", type=int, default=OPTUNA_N_TRIALS)
+    parser.add_argument("--outer-cv-splits", type=int, default=OUTER_CV_SPLITS)
     parser.add_argument("--exchange", default=os.getenv("EXCHANGE", "binance"))
     parser.add_argument("--symbol", default=os.getenv("SYMBOL", "ETH/USDT"))
     args = parser.parse_args()
     success = train(
         lookback_days=args.lookback_days,
         horizon_bars=args.horizon_bars,
+        n_trials=args.n_trials,
+        outer_cv_splits=args.outer_cv_splits,
         exchange=args.exchange,
         symbol=args.symbol,
     )

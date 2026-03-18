@@ -11,18 +11,8 @@ import SignalHistoryPanel from "./components/SignalHistoryPanel";
 import TechnicalSummary from "./components/TechnicalSummary";
 import TopBar from "./components/TopBar";
 import TradingChart from "./components/TradingChart";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-async function api(path, options) {
-  const res = await fetch(API_URL + path, options);
-  if (!res.ok) {
-    let detail = "";
-    try { detail = (await res.json())?.detail || ""; } catch {}
-    throw new Error("API " + res.status + (detail ? ": " + detail : ""));
-  }
-  return res.json();
-}
+import TrainingPanel from "./components/TrainingPanel";
+import { api } from "./api";
 
 function mergeLatest(history, latest) {
   const map = new Map(history.map((b) => [b.ts, b]));
@@ -52,7 +42,7 @@ export default function App() {
   const [features, setFeatures] = useState(null);
   const [dataStatus, setDataStatus] = useState(null);
   const [mlStatus, setMlStatus] = useState(null);
-  const [trainingML, setTrainingML] = useState(false);
+  const [trainingPanelOpen, setTrainingPanelOpen] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
 
   const loadHistory = useCallback(async () => {
@@ -116,19 +106,7 @@ export default function App() {
   const onSymbolChange = useCallback((s) => { setSymbol(s); setHistory([]); }, []);
   const onTimeframeChange = useCallback((tf) => { setTimeframe(tf); setHistory([]); }, []);
 
-  const onTrainML = useCallback(async () => {
-    setTrainingML(true);
-    const tid = toast.loading("ML 모델 학습 시작...");
-    try {
-      const res = await api("/ml/train?lookback_days=60&horizon_bars=4", { method: "POST" });
-      toast.success(res.message || "학습 시작됨", { id: tid });
-      setTimeout(() => loadMlStatus(), 30000);
-    } catch (err) {
-      toast.error(err.message || "학습 실패", { id: tid });
-    } finally {
-      setTrainingML(false);
-    }
-  }, [loadMlStatus]);
+  const onOpenTrainingPanel = useCallback(() => setTrainingPanelOpen(true), []);
 
   const onRefresh = useCallback(async () => {
     const tid = toast.loading("새로고침 중...");
@@ -146,7 +124,7 @@ export default function App() {
         onSymbolChange={onSymbolChange} onTimeframeChange={onTimeframeChange}
         onAutoRefreshChange={setAutoRefresh} onRefresh={onRefresh}
         onOpenIndicators={() => setIndicatorModalOpen(true)}
-        onTrainML={onTrainML} trainingML={trainingML}
+        onOpenTrainingPanel={onOpenTrainingPanel}
       />
 
       <MarketStatsBar history={history} features={features} dataStatus={dataStatus} />
@@ -179,6 +157,7 @@ export default function App() {
       </section>
 
       <IndicatorManagerModal open={indicatorModalOpen} indicators={indicators} onChange={setIndicators} onClose={() => setIndicatorModalOpen(false)} />
+      <TrainingPanel open={trainingPanelOpen} onClose={() => { setTrainingPanelOpen(false); loadMlStatus(); }} />
     </div>
   );
 }

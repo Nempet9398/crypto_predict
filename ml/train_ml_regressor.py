@@ -699,4 +699,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import argparse as _argparse
+    _parser = _argparse.ArgumentParser()
+    _parser.add_argument("--lookback-days", type=int, default=0,
+                         help="0=전체 데이터 (기본), 양수=최근 N일만")
+    _parser.add_argument("--n-trials", type=int, default=OPTUNA_N_TRIALS)
+    _parser.add_argument("--outer-cv-splits", type=int, default=OUTER_CV_SPLITS)
+    _args = _parser.parse_args()
+    # 전역 상수를 CLI 값으로 override
+    OPTUNA_N_TRIALS = _args.n_trials
+    OUTER_CV_SPLITS = _args.outer_cv_splits
     main()

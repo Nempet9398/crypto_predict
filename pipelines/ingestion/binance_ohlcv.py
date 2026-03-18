@@ -152,6 +152,29 @@ def upsert_rows(conn, rows):
     return len(rows)
 
 
+def parse_backfill_start() -> datetime:
+    """
+    백필 시작일 결정 우선순위:
+      1. BACKFILL_FROM_DATE=2023-01-01  (ISO 날짜 문자열)
+      2. INITIAL_BACKFILL_DAYS=30       (레거시, 일수)
+      기본값: 2023-01-01
+    """
+    from_date_str = os.getenv("BACKFILL_FROM_DATE", "")
+    if from_date_str:
+        try:
+            dt = datetime.strptime(from_date_str.strip(), "%Y-%m-%d")
+            return dt.replace(tzinfo=UTC)
+        except ValueError:
+            print(f"[ingestion] WARNING: BACKFILL_FROM_DATE='{from_date_str}' 파싱 실패. 기본값 2023-01-01 사용")
+
+    days = int(os.getenv("INITIAL_BACKFILL_DAYS", "0"))
+    if days > 0:
+        return datetime.now(tz=UTC) - timedelta(days=days)
+
+    # 기본값: 2023-01-01
+    return datetime(2023, 1, 1, tzinfo=UTC)
+
+
 def main():
     exchange_name = get_env("EXCHANGE", "binance")
     symbol = get_env("SYMBOL", "ETH/USDT")
@@ -160,7 +183,6 @@ def main():
     db_user = get_env("DB_USER")
     db_pass = get_env("DB_PASSWORD")
     db_name = get_env("DB_NAME")
-    initial_backfill_days = int(get_env("INITIAL_BACKFILL_DAYS", "30"))
 
     exchange = getattr(ccxt, exchange_name)({"enableRateLimit": True})
     conn = psycopg2.connect(
@@ -175,13 +197,36 @@ def main():
     now_slot = floor_to_timeframe(datetime.now(tz=UTC))
 
     if row_count == 0:
-        start_ts = now_slot - timedelta(days=initial_backfill_days)
-        rows = fetch_range(exchange, exchange_name, symbol, start_ts, now_slot)
-        upsert_rows(conn, rows)
+        # DB가 비어있으면 BACKFILL_FROM_DATE(기본: 2023-01-01)부터 전체 수집
+        start_ts = parse_backfill_start()
+        print(f"[ingestion] 초기 백필 시작: {start_ts.date()} ~ {now_slot.date()}")
+        total_days = (now_slot - start_ts).days
+        print(f"[ingestion] 예상 봉 수: {total_days * 96:,}개 ({total_days}일 × 96봉/일)")
+
+        # 30일 단위로 나눠서 진행률 출력하며 수집
+        chunk = timedelta(days=30)
+        cursor = start_ts
+        total_inserted = 0
+        chunk_num = 0
+        total_chunks = (total_days // 30) + 1
+        while cursor < now_slot:
+            chunk_end = min(cursor + chunk, now_slot)
+            rows = fetch_range(exchange, exchange_name, symbol, cursor, chunk_end)
+            inserted = upsert_rows(conn, rows)
+            total_inserted += inserted
+            chunk_num += 1
+            pct = min(100, int(chunk_num / total_chunks * 100))
+            print(f"[ingestion] 백필 진행: {pct}% | {cursor.date()} ~ {chunk_end.date()} | +{inserted}봉 (누적: {total_inserted:,}봉)")
+            cursor = chunk_end + timedelta(seconds=timeframe_seconds())
+
+        print(f"[ingestion] 백필 완료: 총 {total_inserted:,}봉 수집")
         conn.close()
         return
 
+    # 기존 데이터 있음 → 갭 보완 + 최신 봉 추가
     missing = fetch_missing_timestamps(conn, exchange_name, symbol)
+    if missing:
+        print(f"[ingestion] 갭 {len(missing)}개 감지 → 보완 중")
     for gap_start, gap_end in group_consecutive(missing):
         rows = fetch_range(exchange, exchange_name, symbol, floor_to_timeframe(gap_start), floor_to_timeframe(gap_end))
         upsert_rows(conn, rows)
@@ -190,7 +235,9 @@ def main():
         next_ts = floor_to_timeframe(max_ts + timedelta(seconds=timeframe_seconds()))
         if next_ts <= now_slot:
             rows = fetch_range(exchange, exchange_name, symbol, next_ts, now_slot)
-            upsert_rows(conn, rows)
+            n = upsert_rows(conn, rows)
+            if n:
+                print(f"[ingestion] 최신 봉 {n}개 추가 (~ {now_slot.date()})")
 
     conn.close()
 

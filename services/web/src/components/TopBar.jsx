@@ -14,8 +14,7 @@ export default function TopBar({
   onAutoRefreshChange,
   onRefresh,
   onOpenIndicators,
-  onTrainML,
-  trainingML,
+  onOpenTrainingPanel,
   lastUpdate,
 }) {
   return (
@@ -75,12 +74,11 @@ export default function TopBar({
           ≡ 지표
         </button>
         <button
-          className={"topbar-btn" + (trainingML ? " is-loading" : "")}
-          onClick={onTrainML}
-          disabled={trainingML}
-          title="ML 모델 학습"
+          className="topbar-btn"
+          onClick={onOpenTrainingPanel}
+          title="ML 학습 설정"
         >
-          {trainingML ? "학습 중..." : "ML 학습"}
+          ⚙ ML 학습
         </button>
         <button
           className="topbar-btn icon-btn"

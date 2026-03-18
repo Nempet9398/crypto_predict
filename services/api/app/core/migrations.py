@@ -93,6 +93,49 @@ _MIGRATIONS = [
     # 인덱스
     "CREATE INDEX IF NOT EXISTS idx_signals_ts ON features.signals (exchange, symbol, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ml_preds_ts ON features.ml_predictions (exchange, symbol, ts DESC)",
+    # features.ensemble_config: UI-configurable ensemble weights
+    """
+    CREATE TABLE IF NOT EXISTS features.ensemble_config (
+        key         TEXT        PRIMARY KEY,
+        value       NUMERIC     NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    # Seed default ensemble config values (idempotent)
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_tech', 0.35) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_ml_regressor', 0.30) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_ml_classifier', 0.15) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_mtf_1h', 0.13) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('w_mtf_4h', 0.07) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_normal', 0.08) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('threshold_high_vol', 0.12) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_normal', 0.45) ON CONFLICT (key) DO NOTHING",
+    "INSERT INTO features.ensemble_config (key, value) VALUES ('min_ml_prob_high_vol', 0.52) ON CONFLICT (key) DO NOTHING",
+    # Migration 004: 피처 정교화 v2 (원칙 1,2,3)
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS adx NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_hist_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS atr_pct_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS bb_pct_prev NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_golden_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS macd_dead_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS stoch_golden_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS stoch_dead_cross SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_cross_30_up SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS rsi_cross_70_down SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS volume_above_avg SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS ma_regular_arrangement SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS market_regime_detail TEXT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS shock_detected SMALLINT",
+    # Migration 005: 심리적 지지/저항선 피처
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_100 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_500 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_1000 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_100 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_500 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_1000 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_up SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_down SMALLINT",
 ]
 
 

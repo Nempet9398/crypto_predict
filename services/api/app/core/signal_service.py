@@ -1,11 +1,15 @@
 """
-Signal Engine (ARIMA 없는 버전)
+Signal Engine
 
 신호 생성 로직:
-  1. 기술지표 합성 스코어 (RSI, MACD, BB, Stochastic)  — 가중치 40%
-  2. ML 예측 (XGBoost/LightGBM)                        — 가중치 40%
-  3. 멀티타임프레임 1h 신호                              — 가중치 15%
-  4. 멀티타임프레임 4h 신호                              — 가중치 5%
+  1. 기술지표 합성 스코어 (RSI, MACD, BB, Stochastic, EMA)  — 가중치: DB 설정
+  2. ML 회귀 스코어 (Quantile Regression, 수익률 예측)       — 가중치: DB 설정
+  3. ML 분류 스코어 (방향 예측, prob_up - prob_down)          — 가중치: DB 설정
+  4. 멀티타임프레임 1h 신호                                   — 가중치: DB 설정
+  5. 멀티타임프레임 4h 신호                                   — 가중치: DB 설정
+
+앙상블 가중치는 features.ensemble_config 테이블에서 로드됩니다.
+GET /ensemble/config 로 조회, PUT /ensemble/config 로 실시간 수정 가능.
 
 필터:
   - 변동성 레짐 (고변동성 시 임계값 강화)
@@ -27,6 +31,61 @@ import psycopg2
 import psycopg2.extras
 
 from app.core.db import get_db_conn
+
+# ── Ensemble Config (DB-backed, in-memory cache) ──────────────────────────────
+
+_ENSEMBLE_CONFIG: dict | None = None
+
+# Default weights — used as fallback if DB is not available
+_DEFAULT_ENSEMBLE_CONFIG = {
+    "w_tech": 0.35,
+    "w_ml_regressor": 0.30,
+    "w_ml_classifier": 0.15,
+    "w_mtf_1h": 0.13,
+    "w_mtf_4h": 0.07,
+    "threshold_normal": 0.08,
+    "threshold_high_vol": 0.12,
+    "min_ml_prob_normal": 0.45,
+    "min_ml_prob_high_vol": 0.52,
+}
+
+
+def _load_ensemble_config() -> dict:
+    """Load ensemble weights from DB. Falls back to defaults on error."""
+    global _ENSEMBLE_CONFIG
+    try:
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM features.ensemble_config")
+            rows = cur.fetchall()
+        conn.close()
+        if rows:
+            cfg = {row[0]: float(row[1]) for row in rows}
+            # Fill missing keys with defaults
+            for k, v in _DEFAULT_ENSEMBLE_CONFIG.items():
+                cfg.setdefault(k, v)
+            _ENSEMBLE_CONFIG = cfg
+            return cfg
+    except Exception:
+        pass
+    _ENSEMBLE_CONFIG = _DEFAULT_ENSEMBLE_CONFIG.copy()
+    return _ENSEMBLE_CONFIG
+
+
+def _get_ensemble_config() -> dict:
+    """Return cached ensemble config (lazy load on first call)."""
+    global _ENSEMBLE_CONFIG
+    if _ENSEMBLE_CONFIG is None:
+        return _load_ensemble_config()
+    return _ENSEMBLE_CONFIG
+
+
+def reload_ensemble_config() -> dict:
+    """Force reload ensemble config from DB (called after PUT /ensemble/config)."""
+    global _ENSEMBLE_CONFIG
+    _ENSEMBLE_CONFIG = None
+    return _load_ensemble_config()
+
 
 # ── ML Predictor (lazy load) ─────────────────────────────────────────────────
 _ML_ARTIFACT: Optional[dict] = None
@@ -336,39 +395,40 @@ def compute_signal(
     ml_reg_available = ml_reg["ml_reg_available"]
     ml_return_1h = ml_reg["ml_return_1h"]
 
-    # ── 5. ML 스코어 변환 ────────────────────────────────────────────────
-    # 회귀 모델 있으면 회귀 수익률 기반 스코어 사용 (더 직접적)
-    # CI 폭이 좁을수록 신뢰도 높으므로 가중치 추가
-    if ml_reg_available:
-        # 1% 기준으로 정규화, CI 폭으로 dampening
-        ci_confidence = max(0.5, 1.0 - ml_reg["ml_conf_width_1h"] * 10)
-        ml_reg_score = max(-1.0, min(1.0, ml_return_1h / 0.01)) * ci_confidence
-        # 분류 모델 스코어도 보조로 사용
-        ml_cls_score = ml_prob_up - ml_prob_down
-        ml_score = 0.7 * ml_reg_score + 0.3 * ml_cls_score
-    else:
-        ml_score = ml_prob_up - ml_prob_down  # 분류만 사용
-
     # ── 6. MTF 스코어 ────────────────────────────────────────────────────
     mtf_1h_score = mtf_1h * 0.5   # -0.5, 0, +0.5
     mtf_4h_score = mtf_4h * 0.5
 
-    # ── 7. 최종 앙상블 스코어 ────────────────────────────────────────────
-    # 가중치: 기술지표 35%, ML 45%, MTF1h 13%, MTF4h 7%
-    W_TECH, W_ML, W_MTF1H, W_MTF4H = 0.35, 0.45, 0.13, 0.07
+    # ── 7. 최종 앙상블 스코어 (DB에서 로드된 가중치 사용) ───────────────
+    cfg = _get_ensemble_config()
+    W_TECH = cfg["w_tech"]
+    W_ML_REG = cfg["w_ml_regressor"]
+    W_ML_CLS = cfg["w_ml_classifier"]
+    W_MTF1H = cfg["w_mtf_1h"]
+    W_MTF4H = cfg["w_mtf_4h"]
+
+    # ml_score를 regressor + classifier 가중 합산으로 분리
+    if ml_reg_available:
+        ci_confidence = max(0.5, 1.0 - ml_reg["ml_conf_width_1h"] * 10)
+        ml_reg_score = max(-1.0, min(1.0, ml_return_1h / 0.01)) * ci_confidence
+    else:
+        ml_reg_score = 0.0
+    ml_cls_score = ml_prob_up - ml_prob_down
+
     score = (
         W_TECH * tech_score
-        + W_ML * ml_score
+        + W_ML_REG * ml_reg_score
+        + W_ML_CLS * ml_cls_score
         + W_MTF1H * mtf_1h_score
         + W_MTF4H * mtf_4h_score
     )
 
     # ── 8. 변동성 레짐에 따른 임계값 조정 ───────────────────────────────
-    threshold = 0.08
-    ml_min = min_ml_prob
+    threshold = cfg["threshold_normal"]
+    ml_min = cfg.get("min_ml_prob_normal", min_ml_prob)
     if vol_regime == "high":
-        threshold = 0.12
-        ml_min = max(min_ml_prob, 0.52)
+        threshold = cfg["threshold_high_vol"]
+        ml_min = max(ml_min, cfg.get("min_ml_prob_high_vol", 0.52))
 
     # ── 9. 신호 결정 + 필터 ─────────────────────────────────────────────
     signal = "no-trade"

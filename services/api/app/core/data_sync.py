@@ -278,7 +278,21 @@ def sync_raw_ohlcv_once(
     exchange = exchange or default_exchange()
     symbol = symbol or default_symbol()
     timeframe = timeframe or default_timeframe()
-    initial_backfill_days = int(os.getenv("INITIAL_BACKFILL_DAYS", "30")) if initial_backfill_days is None else int(initial_backfill_days)
+    if initial_backfill_days is None:
+        # BACKFILL_FROM_DATE 우선, 없으면 INITIAL_BACKFILL_DAYS, 기본값 2023-01-01
+        from_date_str = os.getenv("BACKFILL_FROM_DATE", "")
+        if from_date_str:
+            try:
+                from datetime import timezone as _tz
+                _dt = datetime.strptime(from_date_str.strip(), "%Y-%m-%d").replace(tzinfo=_tz.utc)
+                initial_backfill_days = int((datetime.now(tz=_tz.utc) - _dt).days)
+            except ValueError:
+                initial_backfill_days = int(os.getenv("INITIAL_BACKFILL_DAYS", "0")) or 365 * 3  # 기본 3년
+        else:
+            env_days = int(os.getenv("INITIAL_BACKFILL_DAYS", "0"))
+            initial_backfill_days = env_days if env_days > 0 else 365 * 3  # 기본 3년
+    else:
+        initial_backfill_days = int(initial_backfill_days)
 
     status = get_data_status(exchange, symbol, timeframe)
     now_boundary = _now_boundary_utc(timeframe)

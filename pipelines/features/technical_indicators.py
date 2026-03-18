@@ -352,6 +352,64 @@ def compute_market_regime_detail(
     return regime_smooth, shock_detected
 
 
+def compute_round_number_features(close: pd.Series) -> dict[str, pd.Series]:
+    """
+    심리적 지지/저항선 피처 (Round Number Psychology)
+
+    암호화폐 트레이더들은 100, 500, 1000 단위 가격을 심리적 기준으로 삼음.
+    같은 기술지표라도 2000달러 부근에서 나오는 신호와
+    2050달러 부근에서 나오는 신호는 의미가 다름.
+
+    [연속형 피처]
+    - dist_to_round_100  : 가격이 100단위 기준에서 얼마나 떨어져 있는가 (0~0.5)
+    - dist_to_round_500  : 500단위 기준 거리 (0~0.5)
+    - dist_to_round_1000 : 1000단위 기준 거리 (0~0.5)
+
+    [이벤트 피처 - 원칙 1 계열]
+    - near_round_100  : 100단위 ±1% 이내 진입 (0/1)
+    - near_round_500  : 500단위 ±1% 이내 진입 (0/1)
+    - near_round_1000 : 1000단위 ±1.5% 이내 진입 (0/1)  ← 더 강한 심리선
+    - broke_round_100_up   : 이번 봉에서 100단위를 상향 돌파 (0/1)
+    - broke_round_100_down : 이번 봉에서 100단위를 하향 이탈 (0/1)
+    """
+    # ── 연속형: 최근접 round level까지의 거리 (0=딱 붙음, 0.5=중간) ──────────
+    mod_100 = close % 100
+    dist_to_round_100 = pd.concat([mod_100, 100 - mod_100], axis=1).min(axis=1) / 100
+
+    mod_500 = close % 500
+    dist_to_round_500 = pd.concat([mod_500, 500 - mod_500], axis=1).min(axis=1) / 500
+
+    mod_1000 = close % 1000
+    dist_to_round_1000 = pd.concat([mod_1000, 1000 - mod_1000], axis=1).min(axis=1) / 1000
+
+    # ── 이벤트형: 심리선 ±N% 이내 근접 ─────────────────────────────────────────
+    # 100단위 ±1% (예: ETH 2000 기준 ±20달러 = 1980~2020)
+    near_round_100 = (dist_to_round_100 < 0.01).astype(int)
+
+    # 500단위 ±1% (예: ETH 2000 기준 ±20달러)
+    near_round_500 = (dist_to_round_500 < 0.01).astype(int)
+
+    # 1000단위 ±1.5% (예: ETH 2000 기준 ±30달러, 더 중요한 심리선)
+    near_round_1000 = (dist_to_round_1000 < 0.015).astype(int)
+
+    # ── 이벤트형: 100단위 돌파/이탈 순간 ───────────────────────────────────────
+    # 현재 봉의 100단위 위치 (몇 번째 100단위 구간인가)
+    level_100 = (close // 100).astype(int)
+    broke_round_100_up   = ((level_100 > level_100.shift(1)) & (level_100.shift(1).notna())).astype(int)
+    broke_round_100_down = ((level_100 < level_100.shift(1)) & (level_100.shift(1).notna())).astype(int)
+
+    return {
+        "dist_to_round_100":    dist_to_round_100,
+        "dist_to_round_500":    dist_to_round_500,
+        "dist_to_round_1000":   dist_to_round_1000,
+        "near_round_100":       near_round_100,
+        "near_round_500":       near_round_500,
+        "near_round_1000":      near_round_1000,
+        "broke_round_100_up":   broke_round_100_up,
+        "broke_round_100_down": broke_round_100_down,
+    }
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -483,6 +541,11 @@ def main():
         vol_regime=df["vol_regime"],
     )
 
+    # ── 신규: 심리적 지지/저항선 피처 ────────────────────────────────────────────
+    round_feats = compute_round_number_features(close)
+    for col, series in round_feats.items():
+        df[col] = series
+
     # ── MTF 신호 ─────────────────────────────────────────────────────────────────
     df["signal_1h"] = compute_mtf_signal(close, "1h")
     df["signal_4h"] = compute_mtf_signal(close, "4h")
@@ -584,6 +647,15 @@ def main():
             # 신규: 5단계 시장 국면 (원칙 3)
             _s("market_regime_detail"),
             _i("shock_detected"),
+            # 신규: 심리적 지지/저항선
+            _f("dist_to_round_100"),
+            _f("dist_to_round_500"),
+            _f("dist_to_round_1000"),
+            _i("near_round_100"),
+            _i("near_round_500"),
+            _i("near_round_1000"),
+            _i("broke_round_100_up"),
+            _i("broke_round_100_down"),
         ))
 
     insert_sql = """
@@ -603,7 +675,10 @@ def main():
             stoch_golden_cross, stoch_dead_cross,
             rsi_cross_30_up, rsi_cross_70_down,
             volume_above_avg, ma_regular_arrangement,
-            market_regime_detail, shock_detected
+            market_regime_detail, shock_detected,
+            dist_to_round_100, dist_to_round_500, dist_to_round_1000,
+            near_round_100, near_round_500, near_round_1000,
+            broke_round_100_up, broke_round_100_down
         )
         VALUES %s
         ON CONFLICT (exchange, symbol, ts)
@@ -660,6 +735,14 @@ def main():
             ma_regular_arrangement = EXCLUDED.ma_regular_arrangement,
             market_regime_detail   = EXCLUDED.market_regime_detail,
             shock_detected         = EXCLUDED.shock_detected,
+            dist_to_round_100      = EXCLUDED.dist_to_round_100,
+            dist_to_round_500      = EXCLUDED.dist_to_round_500,
+            dist_to_round_1000     = EXCLUDED.dist_to_round_1000,
+            near_round_100         = EXCLUDED.near_round_100,
+            near_round_500         = EXCLUDED.near_round_500,
+            near_round_1000        = EXCLUDED.near_round_1000,
+            broke_round_100_up     = EXCLUDED.broke_round_100_up,
+            broke_round_100_down   = EXCLUDED.broke_round_100_down,
             feature_created_at     = NOW()
     """
 

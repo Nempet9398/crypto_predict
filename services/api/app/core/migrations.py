@@ -127,6 +127,15 @@ _MIGRATIONS = [
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS ma_regular_arrangement SMALLINT",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS market_regime_detail TEXT",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS shock_detected SMALLINT",
+    # Migration 005: 심리적 지지/저항선 피처
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_100 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_500 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS dist_to_round_1000 NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_100 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_500 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_1000 SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_up SMALLINT",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_down SMALLINT",
 ]
 
 

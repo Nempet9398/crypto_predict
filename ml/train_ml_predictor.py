@@ -69,6 +69,15 @@ CANDIDATE_FEATURE_COLS = [
     "ma_regular_arrangement",
     # ── 원칙 3: 추세 강도 ─────────────────────────────────────
     "adx",
+    # ── 심리적 지지/저항선 ─────────────────────────────────────
+    "dist_to_round_100",
+    "dist_to_round_500",
+    "dist_to_round_1000",
+    "near_round_100",
+    "near_round_500",
+    "near_round_1000",
+    "broke_round_100_up",
+    "broke_round_100_down",
 ]
 
 # Feature selection config

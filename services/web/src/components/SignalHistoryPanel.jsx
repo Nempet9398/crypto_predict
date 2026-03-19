@@ -64,7 +64,6 @@ export default function SignalHistoryPanel({ signals = [], onRefresh, loading = 
             </button>
           ))}
         </div>
-      </div>
       <div className="signal-table-wrap">
         <table className="signal-table">
           <thead>

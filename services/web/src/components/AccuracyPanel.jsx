@@ -114,7 +114,7 @@ export default function AccuracyPanel() {
               </div>
               {data.win_rate != null && (
                 <div className="acc-kpi-row">
-                  <span className="acc-kpi-label">수익 승률 (>0.3%)</span>
+                  <span className="acc-kpi-label">수익 승률 (&gt;0.3%)</span>
                   <span className={`acc-kpi-val ${data.win_rate >= 0.5 ? "kpi-pos" : "kpi-neg"}`}>
                     {Math.round(data.win_rate * 100)}%
                     <span className="kpi-sub"> ({data.profit_trades}/{data.directional_total})</span>

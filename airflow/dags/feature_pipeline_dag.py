@@ -46,11 +46,6 @@ def train_ml_regressor_task():
         pass  # Non-fatal: ensemble falls back gracefully
 
 
-def ensemble_signal_task():
-    """Pre-compute ensemble signals for the last 6 hours into features.ensemble_signals."""
-    run_script("ml/compute_ensemble_signals.py", extra_args=["--hours", "6"])
-
-
 def make_dag():
     default_args = {
         "owner": "airflow",
@@ -72,10 +67,9 @@ def make_dag():
         features = PythonOperator(task_id="generate_features", python_callable=feature_task)
         train_ml = PythonOperator(task_id="train_ml_classifier", python_callable=train_ml_task)
         train_ml_reg = PythonOperator(task_id="train_ml_regressor", python_callable=train_ml_regressor_task)
-        ensemble = PythonOperator(task_id="compute_ensemble_signals", python_callable=ensemble_signal_task)
 
-        # Chain: ingest → resample → features(incremental) → [train_ml_classifier, train_ml_regressor] → ensemble
-        ingest >> resample >> features >> [train_ml, train_ml_reg] >> ensemble
+        # Chain: ingest → resample → features(incremental) → [train_ml_classifier, train_ml_regressor]
+        ingest >> resample >> features >> [train_ml, train_ml_reg]
 
     return dag
 

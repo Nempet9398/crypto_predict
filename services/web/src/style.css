@@ -215,6 +215,18 @@ html, body, #root {
   background: var(--bg-base);
   position: relative;
 }
+/* signal-area: 메인 (좌측), 예측/포지션/기술요약 패널 */
+.signal-area {
+  width: 340px;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* chart-area: 보조 (우측) */
 .right-panel {
   width: 300px;
   flex-shrink: 0;
@@ -253,13 +265,19 @@ html, body, #root {
   border-radius: 6px;
   margin-bottom: 10px;
 }
-.signal-main.long { background: rgba(38,166,154,0.12); border: 1px solid rgba(38,166,154,0.3); }
-.signal-main.short { background: rgba(239,83,80,0.12); border: 1px solid rgba(239,83,80,0.3); }
-.signal-main.neutral { background: var(--bg-elevated); border: 1px solid var(--border); }
+.signal-main.strong-long  { background: rgba(38,166,154,0.22); border: 2px solid rgba(38,166,154,0.7); }
+.signal-main.long         { background: rgba(38,166,154,0.12); border: 1px solid rgba(38,166,154,0.3); }
+.signal-main.neutral      { background: var(--bg-elevated); border: 1px solid var(--border); }
+.signal-main.short        { background: rgba(239,83,80,0.12); border: 1px solid rgba(239,83,80,0.3); }
+.signal-main.strong-short { background: rgba(239,83,80,0.22); border: 2px solid rgba(239,83,80,0.7); }
+.signal-main.no-trade     { background: var(--bg-elevated); border: 1px solid var(--border); }
 .signal-label { font-size: 16px; font-weight: 700; }
-.signal-main.long .signal-label { color: var(--up); }
-.signal-main.short .signal-label { color: var(--down); }
-.signal-main.neutral .signal-label { color: var(--text-muted); }
+.signal-main.strong-long .signal-label  { color: #00e5c8; }
+.signal-main.long .signal-label         { color: var(--up); }
+.signal-main.neutral .signal-label      { color: var(--text-muted); }
+.signal-main.short .signal-label        { color: var(--down); }
+.signal-main.strong-short .signal-label { color: #ff5252; }
+.signal-main.no-trade .signal-label     { color: var(--text-muted); }
 .signal-score { font-size: 11px; color: var(--text-secondary); font-family: monospace; }
 
 .confidence-row {
@@ -304,6 +322,8 @@ html, body, #root {
 .mtf-badge.neutral { background: var(--bg-elevated); color: var(--text-muted); }
 
 .vol-regime-row { display: flex; align-items: center; justify-content: space-between; }
+.reason-section { border-top: 1px solid var(--border); }
+.reason-text { font-size: 11px; color: var(--text-secondary); line-height: 1.6; word-break: break-word; }
 
 /* ── PositionPanel ────────────────────────────────────────────────────────── */
 .pos-dir-badge {
@@ -392,6 +412,16 @@ html, body, #root {
   background: none; padding: 0; border: none;
 }
 .accuracy-panel .panel-header { margin-bottom: 8px; }
+
+/* 수익률 KPI 섹션 */
+.acc-kpi-section { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+.acc-kpi-title { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.acc-kpi-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.acc-kpi-label { font-size: 12px; color: var(--text-secondary); }
+.acc-kpi-val { font-size: 14px; font-weight: 700; font-family: monospace; }
+.acc-kpi-val .kpi-sub { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.kpi-pos { color: var(--up); }
+.kpi-neg { color: var(--down); }
 
 .accuracy-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .acc-control-row { display: flex; align-items: center; gap: 10px; }

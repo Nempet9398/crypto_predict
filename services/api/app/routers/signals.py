@@ -52,7 +52,7 @@ def get_current_signal(
 @router.get("/signals/history")
 def get_signal_history(
     limit: int = Query(50, ge=1, le=500),
-    signal_filter: str = Query("all", description="all | long | short | no-trade"),
+    signal_filter: str = Query("all", description="all | strong-long | long | neutral | short | strong-short | no-trade"),
 ):
     """DB에 저장된 과거 신호 목록."""
     where = "exchange = %s AND symbol = %s AND timeframe = %s"
@@ -369,6 +369,18 @@ def get_ml_accuracy(
             SUM(CASE WHEN pred_direction = -1 AND actual_direction = -1 THEN 1 ELSE 0 END) as short_correct,
             SUM(CASE WHEN pred_direction = -1 THEN 1 ELSE 0 END) as short_total,
             AVG(ABS(pred_return - actual_return)) as mae,
+            -- 수익률 KPI (Primary KPI)
+            AVG(
+              CASE WHEN pred_direction = 1 THEN actual_return
+                   WHEN pred_direction = -1 THEN -actual_return
+                   ELSE NULL END
+            ) as avg_return_per_trade,
+            SUM(
+              CASE WHEN (pred_direction = 1 AND actual_return > 0.003)
+                     OR (pred_direction = -1 AND actual_return < -0.003)
+                   THEN 1 ELSE 0 END
+            ) as profit_trades,
+            SUM(CASE WHEN pred_direction != 0 THEN 1 ELSE 0 END) as directional_total,
             MIN(ts) as from_ts,
             MAX(ts) as to_ts
         FROM features.ml_predictions
@@ -393,6 +405,8 @@ def get_ml_accuracy(
     long_total = int(row["long_total"] or 0)
     short_correct = int(row["short_correct"] or 0)
     short_total = int(row["short_total"] or 0)
+    profit_trades = int(row["profit_trades"] or 0)
+    directional_total = int(row["directional_total"] or 0)
 
     return {
         "period_days": days,
@@ -403,6 +417,11 @@ def get_ml_accuracy(
         "long_accuracy": round(long_correct / long_total, 4) if long_total > 0 else None,
         "short_accuracy": round(short_correct / short_total, 4) if short_total > 0 else None,
         "mae": round(float(row["mae"]), 6) if row["mae"] else None,
+        # 수익률 KPI (Primary KPI)
+        "avg_return_per_trade": round(float(row["avg_return_per_trade"]), 6) if row["avg_return_per_trade"] else None,
+        "win_rate": round(profit_trades / directional_total, 4) if directional_total > 0 else None,
+        "profit_trades": profit_trades,
+        "directional_total": directional_total,
         "from_ts": row["from_ts"].isoformat() if row["from_ts"] else None,
         "to_ts": row["to_ts"].isoformat() if row["to_ts"] else None,
     }

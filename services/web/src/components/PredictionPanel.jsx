@@ -66,8 +66,15 @@ export default function PredictionPanel({ signal = null }) {
   }
 
   const dir = signal.signal;
-  const dirClass = dir === "long" ? "long" : dir === "short" ? "short" : "neutral";
-  const dirLabel = dir === "long" ? "▲ LONG" : dir === "short" ? "▼ SHORT" : "— NO TRADE";
+  const SIGNAL_META = {
+    "strong-long":  { cls: "strong-long",  label: "▲▲ STRONG LONG" },
+    "long":         { cls: "long",          label: "▲ LONG" },
+    "neutral":      { cls: "neutral",       label: "— NEUTRAL" },
+    "short":        { cls: "short",         label: "▼ SHORT" },
+    "strong-short": { cls: "strong-short",  label: "▼▼ STRONG SHORT" },
+    "no-trade":     { cls: "no-trade",      label: "✕ NO TRADE" },
+  };
+  const { cls: dirClass, label: dirLabel } = SIGNAL_META[dir] || { cls: "no-trade", label: "— NO TRADE" };
 
   const score = Number(signal.score || 0);
   const confidence = Number(signal.confidence || 0);
@@ -215,6 +222,14 @@ export default function PredictionPanel({ signal = null }) {
           </span>
         </div>
       </div>
+
+      {/* 신호 근거 요약 */}
+      {signal.reason_summary && (
+        <div className="sub-section reason-section">
+          <div className="sub-title">신호 근거</div>
+          <div className="reason-text">{signal.reason_summary}</div>
+        </div>
+      )}
     </div>
   );
 }

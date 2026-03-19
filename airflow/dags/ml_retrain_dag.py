@@ -30,7 +30,7 @@ def run_script(script_rel_path):
 def train_ml_classifier_task():
     """Train XGBoost/LightGBM classifier (direction prediction)."""
     try:
-        run_script("ml/train_ml_classifier.py")
+        run_script("ml/train_ml_predictor.py")
     except subprocess.CalledProcessError:
         pass  # Non-fatal
 

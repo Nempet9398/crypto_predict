@@ -48,19 +48,20 @@ export default function PositionPanel({ signal = null }) {
 
   // 청산가 추정 (격리 마진 기준)
   const liqDist = ep / lev * 0.9;
-  const liqPrice = signal?.signal === "long"
-    ? ep - liqDist
-    : signal?.signal === "short"
-    ? ep + liqDist
-    : null;
+  const isLong = signal?.signal === "long" || signal?.signal === "strong-long";
+  const isShort = signal?.signal === "short" || signal?.signal === "strong-short";
+  const liqPrice = isLong ? ep - liqDist : isShort ? ep + liqDist : null;
 
   return (
     <div className="panel position-panel">
       <div className="panel-header">
         <span className="panel-title">포지션 계산기</span>
-        {signal?.signal && signal.signal !== "no-trade" && (
+        {signal?.signal && !["no-trade", "neutral"].includes(signal.signal) && (
           <span className={"pos-dir-badge " + signal.signal}>
-            {signal.signal === "long" ? "▲ LONG" : "▼ SHORT"}
+            {signal.signal === "strong-long" ? "▲▲ STRONG LONG"
+              : signal.signal === "long" ? "▲ LONG"
+              : signal.signal === "strong-short" ? "▼▼ STRONG SHORT"
+              : "▼ SHORT"}
           </span>
         )}
       </div>

@@ -325,22 +325,33 @@ def get_training_status():
 def get_ml_predictions(
     limit: int = Query(100, ge=1, le=1000),
     horizon_bars: int = Query(4),
+    timeframe: str = Query(TIMEFRAME),
 ):
-    """저장된 ML 예측값 목록 (actual 포함)."""
+    """저장된 신호 기록 (actual_return/actual_direction 포함)."""
     rows = fetch_all("""
-        SELECT ts, horizon_bars, pred_return, pred_close, pred_direction,
-               pred_confidence, actual_return, actual_close, actual_direction,
-               model_id, computed_at
-        FROM features.ml_predictions
-        WHERE exchange = %s AND symbol = %s AND horizon_bars = %s
+        SELECT ts, signal, score, confidence,
+               ml_prob_up, ml_prob_down,
+               actual_return, actual_direction, actualized_at,
+               computed_at
+        FROM features.signals
+        WHERE exchange = %s AND symbol = %s AND timeframe = %s
         ORDER BY ts DESC
         LIMIT %s
-    """, [EXCHANGE, SYMBOL, horizon_bars, limit])
+    """, [EXCHANGE, SYMBOL, timeframe, limit])
 
     preds = []
     for row in (rows or []):
         r = dict(row)
-        for k, v in r.items():
+        # signal → pred_direction 매핑 (호환성)
+        sig = r.get("signal", "")
+        if sig in ("long", "strong-long"):
+            r["pred_direction"] = 1
+        elif sig in ("short", "strong-short"):
+            r["pred_direction"] = -1
+        else:
+            r["pred_direction"] = 0
+        r["pred_confidence"] = r.pop("confidence", None)
+        for k, v in list(r.items()):
             if hasattr(v, "isoformat"):
                 r[k] = v.isoformat()
         preds.append(r)
@@ -481,49 +492,51 @@ def run_backtest_strategy(
 @router.get("/ml/accuracy")
 def get_ml_accuracy(
     days: int = Query(30, ge=1, le=365, description="기간 (일)"),
-    horizon_bars: int = Query(4),
+    horizon_bars: int = Query(4, description="미사용 (호환성 유지)"),
+    timeframe: str = Query(TIMEFRAME),
 ):
     """
-    예측 정확도 계산.
-    actual_direction이 채워진 레코드 기준.
+    신호 정확도 계산 (features.signals 기반).
+    actual_direction이 채워진(actualize DAG 처리 완료) 신호 기준.
+    signal 컬럼: long/strong-long → pred_direction=1, short/strong-short → -1.
     """
     row = fetch_one("""
         SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN pred_direction = actual_direction THEN 1 ELSE 0 END) as correct,
-            SUM(CASE WHEN pred_direction = 1 AND actual_direction = 1 THEN 1 ELSE 0 END) as long_correct,
-            SUM(CASE WHEN pred_direction = 1 THEN 1 ELSE 0 END) as long_total,
-            SUM(CASE WHEN pred_direction = -1 AND actual_direction = -1 THEN 1 ELSE 0 END) as short_correct,
-            SUM(CASE WHEN pred_direction = -1 THEN 1 ELSE 0 END) as short_total,
-            AVG(ABS(pred_return - actual_return)) as mae,
+            SUM(CASE
+                WHEN signal IN ('long','strong-long')   AND actual_direction = 1  THEN 1
+                WHEN signal IN ('short','strong-short') AND actual_direction = -1 THEN 1
+                ELSE 0 END) as correct,
+            SUM(CASE WHEN signal IN ('long','strong-long') AND actual_direction = 1  THEN 1 ELSE 0 END) as long_correct,
+            SUM(CASE WHEN signal IN ('long','strong-long')   THEN 1 ELSE 0 END) as long_total,
+            SUM(CASE WHEN signal IN ('short','strong-short') AND actual_direction = -1 THEN 1 ELSE 0 END) as short_correct,
+            SUM(CASE WHEN signal IN ('short','strong-short') THEN 1 ELSE 0 END) as short_total,
             -- 수익률 KPI (Primary KPI)
             AVG(
-              CASE WHEN pred_direction = 1 THEN actual_return
-                   WHEN pred_direction = -1 THEN -actual_return
+              CASE WHEN signal IN ('long','strong-long')   THEN actual_return
+                   WHEN signal IN ('short','strong-short') THEN -actual_return
                    ELSE NULL END
             ) as avg_return_per_trade,
             SUM(
-              CASE WHEN (pred_direction = 1 AND actual_return > 0.003)
-                     OR (pred_direction = -1 AND actual_return < -0.003)
-                   THEN 1 ELSE 0 END
+              CASE WHEN signal IN ('long','strong-long')   AND actual_return >  0.003 THEN 1
+                   WHEN signal IN ('short','strong-short') AND actual_return < -0.003 THEN 1
+                   ELSE 0 END
             ) as profit_trades,
-            SUM(CASE WHEN pred_direction != 0 THEN 1 ELSE 0 END) as directional_total,
+            SUM(CASE WHEN signal IN ('long','strong-long','short','strong-short') THEN 1 ELSE 0 END) as directional_total,
             MIN(ts) as from_ts,
             MAX(ts) as to_ts
-        FROM features.ml_predictions
-        WHERE exchange = %s AND symbol = %s
-          AND horizon_bars = %s
+        FROM features.signals
+        WHERE exchange = %s AND symbol = %s AND timeframe = %s
           AND actual_direction IS NOT NULL
           AND ts >= NOW() - INTERVAL %s
-    """, [EXCHANGE, SYMBOL, horizon_bars, f"{days} days"])
+    """, [EXCHANGE, SYMBOL, timeframe, f"{days} days"])
 
     if not row or not row["total"]:
         return {
             "period_days": days,
-            "horizon_bars": horizon_bars,
             "total": 0,
             "accuracy": None,
-            "message": "아직 실제 결과가 채워진 예측이 없습니다.",
+            "message": "아직 실제화된 신호가 없습니다. 신호가 쌓인 후 Airflow actualize DAG가 실행되어야 합니다.",
         }
 
     total = int(row["total"])
@@ -537,13 +550,12 @@ def get_ml_accuracy(
 
     return {
         "period_days": days,
-        "horizon_bars": horizon_bars,
+        "timeframe": timeframe,
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total, 4) if total > 0 else None,
         "long_accuracy": round(long_correct / long_total, 4) if long_total > 0 else None,
         "short_accuracy": round(short_correct / short_total, 4) if short_total > 0 else None,
-        "mae": round(float(row["mae"]), 6) if row["mae"] else None,
         # 수익률 KPI (Primary KPI)
         "avg_return_per_trade": round(float(row["avg_return_per_trade"]), 6) if row["avg_return_per_trade"] else None,
         "win_rate": round(profit_trades / directional_total, 4) if directional_total > 0 else None,

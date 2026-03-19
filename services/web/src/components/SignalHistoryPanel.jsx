@@ -29,7 +29,7 @@ const FILTER_OPTIONS = [
   { key: "no-trade",     label: "NO TRADE" },
 ];
 
-export default function SignalHistoryPanel({ signals = [] }) {
+export default function SignalHistoryPanel({ signals = [], onRefresh, loading = false }) {
   const [filter, setFilter] = useState("all");
 
   const filtered = filter === "all"
@@ -39,8 +39,21 @@ export default function SignalHistoryPanel({ signals = [] }) {
   return (
     <div className="panel signal-history-panel">
       <div className="panel-header">
-        <span className="panel-title">신호 이력</span>
-        <div className="filter-btns">
+        <span className="panel-title">신호 이력 <span className="signal-count">({filtered.length})</span></span>
+        <div className="panel-header-right">
+          {onRefresh && (
+            <button
+              className={"panel-refresh-btn" + (loading ? " spinning" : "")}
+              onClick={onRefresh}
+              disabled={loading}
+              title="새로고침"
+            >
+              ↻
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="filter-btns" style={{ padding: "0 8px 6px" }}>
           {FILTER_OPTIONS.map((f) => (
             <button
               key={f.key}
@@ -52,7 +65,6 @@ export default function SignalHistoryPanel({ signals = [] }) {
           ))}
         </div>
       </div>
-
       <div className="signal-table-wrap">
         <table className="signal-table">
           <thead>

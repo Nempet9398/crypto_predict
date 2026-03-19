@@ -366,8 +366,8 @@ def compute_signal(
     max_kelly_fraction: float = 0.25,
 ) -> dict[str, Any]:
     """
-    현재 신호 계산 (ARIMA 없음).
-    기술지표 + ML + MTF 기반으로 LONG/SHORT/NO-TRADE 결정.
+    현재 신호 계산.
+    기술지표 + ML + MTF 기반으로 STRONG LONG / LONG / NEUTRAL / SHORT / STRONG SHORT / NO-TRADE 결정.
     """
     # ── 1. 최신 features 로드 ─────────────────────────────────────────────
     features_row = _fetch_latest_features(exchange, symbol)
@@ -430,8 +430,9 @@ def compute_signal(
         threshold = cfg["threshold_high_vol"]
         ml_min = max(ml_min, cfg.get("min_ml_prob_high_vol", 0.52))
 
-    # ── 9. 신호 결정 + 필터 ─────────────────────────────────────────────
-    signal = "no-trade"
+    # ── 9. 신호 결정 + 필터 (6단계) ─────────────────────────────────────
+    # STRONG LONG / LONG / NEUTRAL / SHORT / STRONG SHORT / NO-TRADE
+    strong_threshold = threshold * 1.8
 
     long_ok = (
         score > threshold
@@ -444,10 +445,18 @@ def compute_signal(
         and (not require_mtf_agreement or mtf_1h <= 0)
     )
 
-    if long_ok:
+    if long_ok and score >= strong_threshold:
+        signal = "strong-long"
+    elif long_ok:
         signal = "long"
+    elif short_ok and score <= -strong_threshold:
+        signal = "strong-short"
     elif short_ok:
         signal = "short"
+    elif abs(score) <= threshold:
+        signal = "neutral"
+    else:
+        signal = "no-trade"
 
     # ── 10. ATR 기반 TP/SL ───────────────────────────────────────────────
     rr_ratio = atr_tp_multiple / max(atr_sl_multiple, 0.01)
@@ -455,17 +464,17 @@ def compute_signal(
     sl_price: Optional[float] = None
 
     if atr_14 > 0 and current_close > 0:
-        if signal == "long":
+        if signal in ("long", "strong-long"):
             tp_price = round(current_close + atr_tp_multiple * atr_14, 4)
             sl_price = round(current_close - atr_sl_multiple * atr_14, 4)
-        elif signal == "short":
+        elif signal in ("short", "strong-short"):
             tp_price = round(current_close - atr_tp_multiple * atr_14, 4)
             sl_price = round(current_close + atr_sl_multiple * atr_14, 4)
 
     # ── 11. Half-Kelly 포지션 사이징 ─────────────────────────────────────
-    if signal == "long":
+    if signal in ("long", "strong-long"):
         prob_win = ml_prob_up if ml_available else 0.5
-    elif signal == "short":
+    elif signal in ("short", "strong-short"):
         prob_win = ml_prob_down if ml_available else 0.5
     else:
         prob_win = 0.5
@@ -476,6 +485,29 @@ def compute_signal(
 
     # ── 12. Confidence ───────────────────────────────────────────────────
     confidence = round(min(abs(score) * 2.0, 1.0), 4)
+
+    # ── 근거 요약 (설명 가능성) ───────────────────────────────────────────
+    def _mtf_label(v):
+        return "강세" if v > 0 else ("약세" if v < 0 else "중립")
+
+    reason_parts = []
+    if tech_score > 0.1:
+        reason_parts.append(f"기술지표 강세({tech_score:+.2f})")
+    elif tech_score < -0.1:
+        reason_parts.append(f"기술지표 약세({tech_score:+.2f})")
+    else:
+        reason_parts.append("기술지표 중립")
+
+    if ml_available:
+        reason_parts.append(f"ML 상승확률 {round(ml_prob_up*100)}%")
+    if ml_reg_available:
+        direction_hint = "상승" if ml_return_1h > 0 else "하락"
+        reason_parts.append(f"회귀예측 {direction_hint} {abs(ml_return_1h)*100:.2f}%")
+
+    reason_parts.append(f"1H {_mtf_label(mtf_1h)} / 4H {_mtf_label(mtf_4h)}")
+    reason_parts.append(f"변동성 {vol_regime.upper()}")
+
+    reason_summary = " · ".join(reason_parts)
 
     result: dict[str, Any] = {
         "signal": signal,
@@ -510,6 +542,8 @@ def compute_signal(
         # Meta
         "timeframe": timeframe,
         "computed_at": datetime.now(timezone.utc).isoformat(),
+        # 근거 요약 (설명 가능성)
+        "reason_summary": reason_summary,
     }
 
     # ── 12. DB 저장 ──────────────────────────────────────────────────────

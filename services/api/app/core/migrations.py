@@ -153,6 +153,41 @@ _MIGRATIONS = [
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS near_round_1000 SMALLINT",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_up SMALLINT",
     "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS broke_round_100_down SMALLINT",
+    # prediction actualization 컬럼: features.signals에 실제 수익률 저장
+    "ALTER TABLE features.signals ADD COLUMN IF NOT EXISTS actual_return    NUMERIC",
+    "ALTER TABLE features.signals ADD COLUMN IF NOT EXISTS actual_direction SMALLINT",
+    "ALTER TABLE features.signals ADD COLUMN IF NOT EXISTS actualized_at   TIMESTAMPTZ",
+    # ML 모델 레지스트리 (001 SQL 마이그레이션 대체 — API 자동 마이그레이션에서 처리)
+    """
+    CREATE TABLE IF NOT EXISTS features.ml_model_registry (
+        model_id      TEXT        PRIMARY KEY,
+        model_type    TEXT        NOT NULL,
+        trained_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        feature_cols  JSONB       NOT NULL,
+        hyperparams   JSONB,
+        metrics       JSONB,
+        is_active     BOOLEAN     NOT NULL DEFAULT FALSE,
+        artifact_path TEXT        NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ml_registry_type ON features.ml_model_registry (model_type, trained_at DESC)",
+    # pipeline 스키마 + water_marks (Airflow 파이프라인 HWM 추적)
+    "CREATE SCHEMA IF NOT EXISTS pipeline",
+    """
+    CREATE TABLE IF NOT EXISTS pipeline.water_marks (
+        pipeline_name  TEXT        PRIMARY KEY,
+        last_ts        TIMESTAMPTZ NOT NULL,
+        rows_processed INT         NOT NULL DEFAULT 0,
+        run_count      INT         NOT NULL DEFAULT 0,
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    # ML 회귀 타겟 컬럼
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_1h NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_3h NUMERIC",
+    "ALTER TABLE features.eth_features ADD COLUMN IF NOT EXISTS target_return_6h NUMERIC",
+    # actualize 쿼리 성능 인덱스
+    "CREATE INDEX IF NOT EXISTS idx_signals_unactualized ON features.signals (exchange, symbol, ts) WHERE actual_return IS NULL",
 ]
 
 

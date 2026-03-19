@@ -7,12 +7,12 @@ from pydantic import BaseModel
 class FeatureRow(BaseModel):
     ts: datetime
     close: float
-    returns_1h: float
-    sma_5: float
-    sma_10: float
-    ema_10: float
-    volatility_10: float
-    # Extended indicators
+    returns_1bar: Optional[float] = None  # DB 컬럼명: returns_1bar (not returns_1h)
+    sma_20: Optional[float] = None
+    ema_20: Optional[float] = None
+    ema_50: Optional[float] = None
+    ema_200: Optional[float] = None
+    volatility_10: Optional[float] = None
     rsi_14: Optional[float] = None
     macd_line: Optional[float] = None
     macd_signal: Optional[float] = None

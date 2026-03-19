@@ -168,8 +168,12 @@ export default function TradingChart({ history = [], signal = null, indicators =
     if (!time) return;
 
     const markers = [];
-    if (signal.signal === "long") {
+    if (signal.signal === "strong-long") {
+      markers.push({ time, position: "belowBar", color: UP_COLOR, shape: "arrowUp", text: "STRONG LONG", size: 3 });
+    } else if (signal.signal === "long") {
       markers.push({ time, position: "belowBar", color: UP_COLOR, shape: "arrowUp", text: "LONG", size: 2 });
+    } else if (signal.signal === "strong-short") {
+      markers.push({ time, position: "aboveBar", color: DOWN_COLOR, shape: "arrowDown", text: "STRONG SHORT", size: 3 });
     } else if (signal.signal === "short") {
       markers.push({ time, position: "aboveBar", color: DOWN_COLOR, shape: "arrowDown", text: "SHORT", size: 2 });
     }

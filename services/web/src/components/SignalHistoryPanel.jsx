@@ -10,6 +10,25 @@ function price(v) {
   return "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+const SIGNAL_LABEL = {
+  "strong-long":  "▲▲ STRONG LONG",
+  "long":         "▲ LONG",
+  "neutral":      "— NEUTRAL",
+  "short":        "▼ SHORT",
+  "strong-short": "▼▼ STRONG SHORT",
+  "no-trade":     "⊘ NO TRADE",
+};
+
+const FILTER_OPTIONS = [
+  { key: "all",          label: "전체" },
+  { key: "strong-long",  label: "STR LONG" },
+  { key: "long",         label: "LONG" },
+  { key: "neutral",      label: "NEUTRAL" },
+  { key: "short",        label: "SHORT" },
+  { key: "strong-short", label: "STR SHORT" },
+  { key: "no-trade",     label: "NO TRADE" },
+];
+
 export default function SignalHistoryPanel({ signals = [] }) {
   const [filter, setFilter] = useState("all");
 
@@ -22,13 +41,13 @@ export default function SignalHistoryPanel({ signals = [] }) {
       <div className="panel-header">
         <span className="panel-title">신호 이력</span>
         <div className="filter-btns">
-          {["all", "long", "short", "no-trade"].map((f) => (
+          {FILTER_OPTIONS.map((f) => (
             <button
-              key={f}
-              className={"filter-btn" + (filter === f ? " active" : "")}
-              onClick={() => setFilter(f)}
+              key={f.key}
+              className={"filter-btn" + (filter === f.key ? " active" : "")}
+              onClick={() => setFilter(f.key)}
             >
-              {f === "all" ? "전체" : f.toUpperCase()}
+              {f.label}
             </button>
           ))}
         </div>
@@ -61,10 +80,10 @@ export default function SignalHistoryPanel({ signals = [] }) {
                 </td>
                 <td>
                   <span className={"sig-badge " + sig.signal}>
-                    {sig.signal === "long" ? "▲ LONG" : sig.signal === "short" ? "▼ SHORT" : "—"}
+                    {SIGNAL_LABEL[sig.signal] || sig.signal || "—"}
                   </span>
                 </td>
-                <td className={Number(sig.score) > 0 ? "up" : "down"}>
+                <td className={Number(sig.score) > 0 ? "up" : Number(sig.score) < 0 ? "down" : ""}>
                   {fmt(sig.score)}
                 </td>
                 <td>{sig.confidence ? Math.round(Number(sig.confidence) * 100) + "%" : "—"}</td>

@@ -82,10 +82,32 @@ export default function AccuracyPanel() {
 
       {!loading && data && total > 0 && (
         <div className="accuracy-results">
+          {/* 수익률 KPI (Primary) */}
+          {data.avg_return_per_trade != null && (
+            <div className="acc-kpi-section">
+              <div className="acc-kpi-title">수익률 성과 (Primary KPI)</div>
+              <div className="acc-kpi-row">
+                <span className="acc-kpi-label">거래당 평균 수익률</span>
+                <span className={`acc-kpi-val ${data.avg_return_per_trade >= 0 ? "kpi-pos" : "kpi-neg"}`}>
+                  {data.avg_return_per_trade >= 0 ? "+" : ""}{(data.avg_return_per_trade * 100).toFixed(3)}%
+                </span>
+              </div>
+              {data.win_rate != null && (
+                <div className="acc-kpi-row">
+                  <span className="acc-kpi-label">수익 승률 (>0.3%)</span>
+                  <span className={`acc-kpi-val ${data.win_rate >= 0.5 ? "kpi-pos" : "kpi-neg"}`}>
+                    {Math.round(data.win_rate * 100)}%
+                    <span className="kpi-sub"> ({data.profit_trades}/{data.directional_total})</span>
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {/* 방향 정확도 */}
           <div className="acc-main">
             <div className="acc-circle">
               <span className="acc-pct">{acc != null ? Math.round(acc * 100) + "%" : "—"}</span>
-              <span className="acc-sub">전체 정확도</span>
+              <span className="acc-sub">방향 정확도</span>
             </div>
             <div className="acc-details">
               <div className="acc-detail-row">

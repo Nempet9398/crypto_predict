@@ -130,14 +130,14 @@ export default function App() {
       <MarketStatsBar history={history} features={features} dataStatus={dataStatus} />
 
       <main className="dashboard-main">
-        <div className="chart-area">
-          <TradingChart history={history} signal={signal} indicators={indicators} />
-        </div>
-        <aside className="right-panel">
+        <div className="signal-area">
           <PredictionPanel signal={signal} />
           <PositionPanel signal={signal} />
           <TechnicalSummary features={features} />
-        </aside>
+        </div>
+        <div className="chart-area">
+          <TradingChart history={history} signal={signal} indicators={indicators} />
+        </div>
       </main>
 
       <section className="bottom-section">

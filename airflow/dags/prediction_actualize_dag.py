@@ -1,21 +1,17 @@
 """
 Prediction Actualize DAG — runs hourly.
 
-Problem: features.ensemble_signals stores trading signals but actual_return stays NULL forever.
+Problem: features.signals stores trading signals but actual_return stays NULL forever.
          Without actualization, we can't measure prediction accuracy or run realistic backtests.
 
 Solution: For each past signal where:
   - actual_return IS NULL
-  - signal_ts + max_horizon < NOW() (enough time has passed)
+  - ts + max_horizon < NOW() (enough time has passed)
 
-Look up the actual price at signal_ts + horizon and compute:
+Look up the actual price at ts + horizon and compute:
   - actual_return    = (close_at_horizon - close_at_signal) / close_at_signal
   - actual_direction = +1 (>0.3%), -1 (<-0.3%), 0 otherwise
   - actualized_at    = NOW()
-
-After actualization, ensemble_signals becomes a self-contained backtest dataset:
-  - signal vs actual_direction → directional accuracy
-  - predicted_return (from ML regressor) vs actual_return → regression MAE/IC
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -27,23 +23,12 @@ from airflow.operators.python import PythonOperator
 
 UTC = timezone.utc
 
-# How far past the horizon before we try to actualize
-# (extra buffer so the candle is definitely in the DB)
 ACTUALIZE_BUFFER_HOURS = 1
-
-# Direction threshold (matches target_direction logic)
 DIRECTION_THRESHOLD = 0.003  # 0.3%
 
-# Horizon mapping: timeframe column value → hours
-HORIZON_HOURS = {
-    "1h": 1,
-    "3h": 3,
-    "6h": 6,
-    "4h": 4,
-}
+# Default horizon: 1h (4 x 15m bars)
 DEFAULT_HORIZON_HOURS = 1
 
-# Max rows to process per run (avoid long-running tasks)
 BATCH_SIZE = 500
 
 
@@ -61,54 +46,46 @@ def actualize_predictions(**context):
     """Fill actual_return and actual_direction for signals whose horizon has passed."""
     conn = _get_conn()
     try:
-        # Max horizon we care about (6h + buffer = 7h)
-        max_horizon_h = max(HORIZON_HOURS.values()) + ACTUALIZE_BUFFER_HOURS
-        cutoff_ts = datetime.now(tz=UTC) - timedelta(hours=max_horizon_h)
+        cutoff_ts = datetime.now(tz=UTC) - timedelta(hours=DEFAULT_HORIZON_HOURS + ACTUALIZE_BUFFER_HOURS)
 
-        # Fetch un-actualized signals that are old enough
+        # Fetch un-actualized signals from features.signals (composite PK: exchange, symbol, ts, timeframe)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, signal_ts, timeframe, exchange, symbol
-                FROM features.ensemble_signals
+                SELECT exchange, symbol, ts, timeframe
+                FROM features.signals
                 WHERE actual_return IS NULL
-                  AND signal_ts < %s
-                ORDER BY signal_ts ASC
+                  AND ts < %s
+                ORDER BY ts ASC
                 LIMIT %s
             """, (cutoff_ts, BATCH_SIZE))
             pending = cur.fetchall()
 
         if not pending:
-            print("[actualize] No pending predictions to actualize.")
+            print("[actualize] No pending signals to actualize.")
             context["ti"].xcom_push(key="actualized_count", value=0)
             return
 
         print(f"[actualize] Found {len(pending)} signals to actualize.")
 
-        # Collect all unique (exchange, symbol, ts) we need to look up
-        # We need: entry price at signal_ts and actual price at signal_ts + horizon
-        needed_ts = set()
         signal_data = []
-        for row_id, signal_ts, timeframe, exchange, symbol in pending:
-            horizon_h = HORIZON_HOURS.get(timeframe, DEFAULT_HORIZON_HOURS)
-            actual_ts = signal_ts + timedelta(hours=horizon_h)
+        needed_ts = set()
+        for exchange, symbol, signal_ts, timeframe in pending:
+            actual_ts = signal_ts + timedelta(hours=DEFAULT_HORIZON_HOURS)
             needed_ts.add((exchange, symbol, signal_ts))
             needed_ts.add((exchange, symbol, actual_ts))
             signal_data.append({
-                "id": row_id,
-                "signal_ts": signal_ts,
-                "timeframe": timeframe,
                 "exchange": exchange,
                 "symbol": symbol,
-                "horizon_h": horizon_h,
+                "signal_ts": signal_ts,
+                "timeframe": timeframe,
                 "actual_ts": actual_ts,
             })
 
-        # Build lookup of (exchange, symbol, ts) → close price
-        # Batch fetch all needed timestamps in one query
+        # Batch fetch all needed close prices
         exchange_sym_pairs = list({(r["exchange"], r["symbol"]) for r in signal_data})
         all_ts = [ts for (_, _, ts) in needed_ts]
 
-        prices: dict[tuple, float] = {}
+        prices: dict = {}
         if all_ts:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -149,7 +126,10 @@ def actualize_predictions(**context):
                 float(actual_return),
                 int(actual_direction),
                 datetime.now(tz=UTC),
-                sig["id"],
+                sig["exchange"],
+                sig["symbol"],
+                sig["signal_ts"],
+                sig["timeframe"],
             ))
 
         if updates:
@@ -157,15 +137,19 @@ def actualize_predictions(**context):
                 psycopg2.extras.execute_values(
                     cur,
                     """
-                    UPDATE features.ensemble_signals AS es
+                    UPDATE features.signals AS s
                     SET actual_return    = data.actual_return,
                         actual_direction = data.actual_direction,
                         actualized_at    = data.actualized_at
-                    FROM (VALUES %s) AS data(actual_return, actual_direction, actualized_at, id)
-                    WHERE es.id = data.id
+                    FROM (VALUES %s) AS data(actual_return, actual_direction, actualized_at,
+                                            exchange, symbol, ts, timeframe)
+                    WHERE s.exchange  = data.exchange
+                      AND s.symbol    = data.symbol
+                      AND s.ts        = data.ts
+                      AND s.timeframe = data.timeframe
                     """,
                     updates,
-                    template="(%s::NUMERIC, %s::SMALLINT, %s::TIMESTAMPTZ, %s::BIGINT)",
+                    template="(%s::NUMERIC, %s::SMALLINT, %s::TIMESTAMPTZ, %s, %s, %s::TIMESTAMPTZ, %s)",
                 )
             conn.commit()
 
@@ -189,16 +173,20 @@ def log_actualization_stats(**context):
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
-            # Overall accuracy stats
             cur.execute("""
                 SELECT
                     COUNT(*) FILTER (WHERE actual_return IS NOT NULL) AS actualized_total,
                     COUNT(*) FILTER (WHERE actual_return IS NULL) AS pending_total,
                     AVG(ABS(actual_return)) FILTER (WHERE actual_return IS NOT NULL) AS mean_abs_return,
                     AVG(
-                        CASE WHEN signal = actual_direction::TEXT THEN 1.0 ELSE 0.0 END
+                        CASE
+                          WHEN (signal IN ('long','strong-long')  AND actual_direction = 1)  THEN 1.0
+                          WHEN (signal IN ('short','strong-short') AND actual_direction = -1) THEN 1.0
+                          WHEN (signal = 'neutral' AND actual_direction = 0)                  THEN 1.0
+                          ELSE 0.0
+                        END
                     ) FILTER (WHERE actual_return IS NOT NULL) AS dir_accuracy
-                FROM features.ensemble_signals
+                FROM features.signals
             """)
             row = cur.fetchone()
     finally:
@@ -239,10 +227,12 @@ def make_dag():
         actualize = PythonOperator(
             task_id="actualize_predictions",
             python_callable=actualize_predictions,
+            provide_context=True,
         )
         stats = PythonOperator(
             task_id="log_actualization_stats",
             python_callable=log_actualization_stats,
+            provide_context=True,
         )
 
         actualize >> stats

@@ -351,6 +351,134 @@ def get_ml_predictions(
 
 # ── ML 정확도 통계 ────────────────────────────────────────────────────────────
 
+# ── 백테스트 ──────────────────────────────────────────────────────────────────
+
+@router.get("/backtest/strategy")
+def run_backtest_strategy(
+    lookback_days: int = Query(14, ge=1, le=365, description="백테스트 기간 (일)"),
+    horizon_hours: int = Query(6, ge=1, le=168, description="신호 호라이즌 (시간, 정보용)"),
+    up_prob_threshold: float = Query(0.6, ge=0.0, le=1.0, description="롱 진입 최소 상승 확률"),
+    down_prob_threshold: float = Query(0.6, ge=0.0, le=1.0, description="숏 진입 최소 하락 확률"),
+    up_pct: float = Query(1.0, description="미사용 (호환성 유지)"),
+    down_pct: float = Query(1.0, description="미사용 (호환성 유지)"),
+    fee_bps: int = Query(4, ge=0, le=50, description="거래 수수료 (basis points)"),
+    slippage_bps: int = Query(2, ge=0, le=50, description="슬리피지 (basis points)"),
+    timeframe: str = Query(TIMEFRAME),
+):
+    """
+    과거 신호(actual_return 채워진 것)를 이용한 전략 백테스트.
+    수익률 시뮬레이션: 롱/숏 신호 기반, 수수료+슬리피지 차감.
+    """
+    import math
+
+    rows = fetch_all(
+        """
+        SELECT ts, signal, actual_return, ml_prob_up, ml_prob_down
+        FROM features.signals
+        WHERE exchange = %s AND symbol = %s AND timeframe = %s
+          AND actual_return IS NOT NULL
+          AND ts >= NOW() - INTERVAL %s
+        ORDER BY ts ASC
+        """,
+        [EXCHANGE, SYMBOL, timeframe, f"{lookback_days} days"],
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="백테스트에 사용할 실제 결과 데이터가 없습니다. 신호 실현값이 아직 계산되지 않았습니다.",
+        )
+
+    cost = (fee_bps + slippage_bps) / 10000 * 2  # 왕복 비용
+
+    trades = []
+    for row in rows:
+        sig = row["signal"]
+        prob_up = float(row.get("ml_prob_up") or 0.0)
+        prob_down = float(row.get("ml_prob_down") or 0.0)
+        actual_return = float(row["actual_return"])
+
+        if sig in ("long", "strong-long") and prob_up >= up_prob_threshold:
+            trades.append({"ts": row["ts"].isoformat(), "pnl": actual_return - cost})
+        elif sig in ("short", "strong-short") and prob_down >= down_prob_threshold:
+            trades.append({"ts": row["ts"].isoformat(), "pnl": -actual_return - cost})
+
+    if not trades:
+        raise HTTPException(
+            status_code=404,
+            detail=f"확률 임계값({up_prob_threshold}/{down_prob_threshold})을 충족하는 신호가 없습니다. 임계값을 낮추거나 기간을 늘려보세요.",
+        )
+
+    returns = [t["pnl"] for t in trades]
+    n = len(returns)
+
+    # 누적 PnL + MDD 계산
+    cum_pnl = 0.0
+    peak = 0.0
+    mdd = 0.0
+    mdd_start_idx = 0
+    max_mdd_dur = 0
+    pnl_series = []
+
+    for i, t in enumerate(trades):
+        cum_pnl += t["pnl"]
+        if cum_pnl > peak:
+            peak = cum_pnl
+            mdd_start_idx = i
+        else:
+            dur = i - mdd_start_idx
+            if dur > max_mdd_dur:
+                max_mdd_dur = dur
+        dd = peak - cum_pnl
+        if dd > mdd:
+            mdd = dd
+        pnl_series.append({"ts": t["ts"], "cum_pnl": round(cum_pnl, 6)})
+
+    mean_r = sum(returns) / n
+    variance = sum((r - mean_r) ** 2 for r in returns) / n
+    std_r = math.sqrt(variance) if variance > 0 else 1e-9
+
+    neg_returns = [r for r in returns if r < 0]
+    downside_var = sum(r ** 2 for r in neg_returns) / len(neg_returns) if neg_returns else 0.0
+    std_neg = math.sqrt(downside_var) if downside_var > 0 else 1e-9
+
+    # 연간화 인수: 거래 빈도 기반
+    trades_per_year = max(n / max(lookback_days, 1) * 365, 1)
+    ann = math.sqrt(trades_per_year)
+
+    sharpe = mean_r / std_r * ann
+    sortino = mean_r / std_neg * ann
+    calmar = cum_pnl / mdd if mdd > 1e-9 else (float("inf") if cum_pnl > 0 else 0.0)
+
+    wins = [r for r in returns if r > 0]
+    losses = [r for r in returns if r <= 0]
+    win_rate = len(wins) / n
+    gross_profit = sum(wins) if wins else 0.0
+    gross_loss = abs(sum(losses)) if losses else 1e-9
+    profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else 999.0
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 1e-9
+    payoff_ratio = avg_win / avg_loss if avg_loss > 1e-9 else 0.0
+
+    return {
+        "summary": {
+            "sharpe": round(sharpe, 3),
+            "sortino": round(sortino, 3),
+            "calmar": round(calmar, 3),
+            "profit_factor": round(profit_factor, 3),
+            "win_rate": round(win_rate, 4),
+            "payoff_ratio": round(payoff_ratio, 3),
+            "cumulative_pnl": round(cum_pnl, 6),
+            "mdd": round(-mdd, 6),
+            "mdd_duration_bars": max_mdd_dur,
+            "n_trades": n,
+        },
+        "pnl_series": pnl_series,
+        "timeframe": timeframe,
+        "horizon_hours": horizon_hours,
+    }
+
+
 @router.get("/ml/accuracy")
 def get_ml_accuracy(
     days: int = Query(30, ge=1, le=365, description="기간 (일)"),

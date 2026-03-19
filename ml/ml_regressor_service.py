@@ -16,12 +16,11 @@ import psycopg2
 
 logger = logging.getLogger("ml_regressor_service")
 
-FEATURE_COLS = [
+# 폴백용 피처 컬럼 (artifact에 feature_cols 없을 때만 사용)
+_FALLBACK_FEATURE_COLS = [
     "rsi_14", "macd_hist", "bb_pct", "atr_pct", "stoch_k",
     "signal_1h", "signal_4h", "volatility_10", "bb_width",
-    "returns_lag_1", "returns_lag_2", "returns_lag_3",
-    "returns_lag_4", "returns_lag_6", "returns_lag_8",
-    "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+    "returns_1bar", "returns_4bar", "returns_16bar",
 ]
 
 HORIZONS = ["1h", "3h", "6h"]
@@ -131,9 +130,12 @@ class MLRegressorService:
                 scaler = artifact["scaler"]
                 models = artifact["models"]  # {0.10: model, 0.50: model, 0.90: model}
 
+                # artifact에 저장된 feature_cols 우선 사용 (없으면 fallback)
+                feature_cols = artifact.get("feature_cols", _FALLBACK_FEATURE_COLS)
+
                 # Build feature vector
                 feat_vec = np.array(
-                    [float(features.get(col, 0.0) or 0.0) for col in FEATURE_COLS],
+                    [float(features.get(col, 0.0) or 0.0) for col in feature_cols],
                     dtype=float,
                 ).reshape(1, -1)
                 feat_scaled = scaler.transform(feat_vec)

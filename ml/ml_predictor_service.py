@@ -30,7 +30,8 @@ def load_active_ml_model() -> Optional[dict]:
         return None
 
 
-FEATURE_COLS = [
+# 폴백용 피처 컬럼 (학습 시 저장된 feature_cols 없을 때만 사용)
+_FALLBACK_FEATURE_COLS = [
     "returns_1bar", "returns_4bar", "returns_16bar",
     "rsi_14", "macd_line", "macd_signal", "macd_hist",
     "bb_pct", "bb_width",
@@ -42,10 +43,11 @@ FEATURE_COLS = [
 ]
 
 
-def _build_feature_vector(row: dict) -> Optional[np.ndarray]:
-    """features_row dict에서 모델 입력 벡터 생성."""
+def _build_feature_vector(row: dict, feature_cols: Optional[list] = None) -> Optional[np.ndarray]:
+    """features_row dict에서 모델 입력 벡터 생성. artifact의 feature_cols 우선 사용."""
+    cols = feature_cols if feature_cols else _FALLBACK_FEATURE_COLS
     values = []
-    for col in FEATURE_COLS:
+    for col in cols:
         v = row.get(col)
         if v is None:
             values.append(0.0)
@@ -70,7 +72,9 @@ def predict(features_row: dict, artifact: Optional[dict] = None) -> dict:
 
     try:
         model = artifact["model"]
-        X = _build_feature_vector(features_row)
+        # 학습 시 저장된 feature_cols 사용 (없으면 fallback)
+        feature_cols = artifact.get("meta", {}).get("feature_cols")
+        X = _build_feature_vector(features_row, feature_cols)
 
         if hasattr(model, "predict_proba"):
             # 분류 모델: classes = [-1, 0, 1]

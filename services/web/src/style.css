@@ -470,8 +470,11 @@ html, body, #root {
 .sig-badge {
   padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; white-space: nowrap;
 }
+.sig-badge.strong-long { background: rgba(38,166,154,0.30); color: #26a69a; font-weight: 700; }
 .sig-badge.long { background: rgba(38,166,154,0.15); color: var(--up); }
+.sig-badge.neutral { background: rgba(148,163,184,0.10); color: var(--text-secondary); }
 .sig-badge.short { background: rgba(239,83,80,0.15); color: var(--down); }
+.sig-badge.strong-short { background: rgba(239,83,80,0.30); color: #ef5350; font-weight: 700; }
 .sig-badge.no-trade { background: var(--bg-elevated); color: var(--text-muted); }
 .filter-btns { display: flex; gap: 3px; }
 .filter-btn {

@@ -43,9 +43,9 @@ COMMENT ON COLUMN features.eth_features.target_return_6h IS '(close(t+24) - clos
 -- model_type examples: 'xgb_regressor_1h', 'lgb_regressor_3h', 'xgb_classifier', etc.
 -- No schema change needed — model_type TEXT already covers this.
 
--- Index for actualize query performance (un-actualized rows)
-CREATE INDEX IF NOT EXISTS idx_ensemble_signals_unactualized
-    ON features.ensemble_signals (signal_ts)
+-- Index for actualize query performance (un-actualized rows in features.signals)
+CREATE INDEX IF NOT EXISTS idx_signals_unactualized
+    ON features.signals (exchange, symbol, ts)
     WHERE actual_return IS NULL;
 
 -- Index for water_marks fast lookup

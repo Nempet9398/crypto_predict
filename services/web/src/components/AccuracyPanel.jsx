@@ -13,6 +13,7 @@ export default function AccuracyPanel() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [lastFetched, setLastFetched] = useState(null);
 
   const fetchAccuracy = useCallback(async () => {
     setLoading(true);
@@ -20,6 +21,7 @@ export default function AccuracyPanel() {
       const res = await fetch(`${API_URL}/ml/accuracy?days=${days}&horizon_bars=${horizon}`);
       const json = await res.json();
       setData(json);
+      setLastFetched(new Date());
     } catch {
       setData(null);
     } finally {
@@ -38,6 +40,21 @@ export default function AccuracyPanel() {
     <div className="panel accuracy-panel">
       <div className="panel-header">
         <span className="panel-title">예측 정확도</span>
+        <div className="panel-header-right">
+          {lastFetched && (
+            <span className="panel-last-update">
+              {lastFetched.toLocaleTimeString("ko-KR")}
+            </span>
+          )}
+          <button
+            className={"panel-refresh-btn" + (loading ? " spinning" : "")}
+            onClick={fetchAccuracy}
+            disabled={loading}
+            title="새로고침"
+          >
+            ↻
+          </button>
+        </div>
       </div>
 
       <div className="accuracy-controls">
@@ -75,8 +92,11 @@ export default function AccuracyPanel() {
 
       {!loading && data && total === 0 && (
         <div className="panel-empty acc-empty">
-          <div>아직 검증된 예측 데이터가 없습니다.</div>
-          <div className="acc-hint">ML 학습 후 일정 시간 경과 시 정확도가 표시됩니다.</div>
+          <div>아직 실제화된 신호가 없습니다.</div>
+          <div className="acc-hint">
+            신호가 저장된 후 Airflow <code>actualize_dag</code>가 실행되면 표시됩니다.
+            <br />학습 직후에는 신호를 생성하고 horizon 시간이 지나야 채워집니다.
+          </div>
         </div>
       )}
 
@@ -111,7 +131,7 @@ export default function AccuracyPanel() {
             </div>
             <div className="acc-details">
               <div className="acc-detail-row">
-                <span className="acc-detail-label">총 예측 수</span>
+                <span className="acc-detail-label">총 신호 수</span>
                 <span className="acc-detail-val">{total}건</span>
               </div>
               <div className="acc-detail-row up">
@@ -126,12 +146,6 @@ export default function AccuracyPanel() {
                   {shortAcc != null ? Math.round(shortAcc * 100) + "%" : "—"}
                 </span>
               </div>
-              {data.mae != null && (
-                <div className="acc-detail-row">
-                  <span className="acc-detail-label">MAE</span>
-                  <span className="acc-detail-val">{(data.mae * 100).toFixed(4)}%</span>
-                </div>
-              )}
             </div>
           </div>
           {data.from_ts && data.to_ts && (

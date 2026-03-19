@@ -257,6 +257,20 @@ html, body, #root {
 }
 .panel-update { font-size: 10px; color: var(--text-muted); font-family: monospace; }
 .panel-empty { color: var(--text-muted); font-size: 12px; text-align: center; padding: 12px 0; }
+.panel-header-right { display: flex; align-items: center; gap: 6px; }
+.panel-last-update { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+.panel-refresh-btn {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: 4px;
+  width: 22px; height: 22px; font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.2s, border-color 0.2s;
+}
+.panel-refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+.panel-refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.panel-refresh-btn.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.signal-count { font-size: 10px; font-weight: 400; color: var(--text-muted); margin-left: 3px; }
 
 /* ── PredictionPanel ──────────────────────────────────────────────────────── */
 .signal-main {
@@ -329,7 +343,9 @@ html, body, #root {
 .pos-dir-badge {
   padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
 }
+.pos-dir-badge.strong-long { background: rgba(38,166,154,0.30); color: #26a69a; font-weight: 800; }
 .pos-dir-badge.long { background: rgba(38,166,154,0.15); color: var(--up); }
+.pos-dir-badge.strong-short { background: rgba(239,83,80,0.30); color: #ef5350; font-weight: 800; }
 .pos-dir-badge.short { background: rgba(239,83,80,0.15); color: var(--down); }
 
 .pos-inputs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }

@@ -151,13 +151,13 @@ export default function App() {
         <div className="bottom-content">
           {activeTab === "accuracy" && <AccuracyPanel />}
           {activeTab === "backtest" && <BacktestPanel timeframe={timeframe} />}
-          {activeTab === "signals" && <SignalHistoryPanel signals={signalHistory} />}
+          {activeTab === "signals" && <SignalHistoryPanel signals={signalHistory} onRefresh={loadSignalHistory} loading={loading} />}
           {activeTab === "status" && <ModelDataStatusPanel dataStatus={dataStatus} mlStatus={mlStatus} />}
         </div>
       </section>
 
       <IndicatorManagerModal open={indicatorModalOpen} indicators={indicators} onChange={setIndicators} onClose={() => setIndicatorModalOpen(false)} />
-      <TrainingPanel open={trainingPanelOpen} onClose={() => { setTrainingPanelOpen(false); loadMlStatus(); }} />
+      <TrainingPanel open={trainingPanelOpen} onClose={() => { setTrainingPanelOpen(false); loadAll(); }} />
     </div>
   );
 }
